@@ -334,8 +334,21 @@ DSH 里默认是零围栏的）。返回体上限最小化：默认不含变量*
   `export const Config` / `export async function apply`）。DSH 按 `isConstructor` 规则
   （有没有 `.prototype`）决定要不要 `new`：把 `apply` 写成箭头函数常量或对象方法简写会改变
   调用方式，插件会**静默**失效。
-- client 侧（`client/**/*.ts`，打包成 `lib/client.js`）不得 `require` 任何 Harness Client 包，包括
-  `@deepseek-ai/dsh-client-ui-primitives`；只用 `react` / `react-dom` / `react/jsx-runtime`
-  与 `React.createElement`（**不用 JSX**）。
+- client 侧（`client/**/*.ts`，打包成 `lib/client.js`）的运行期 `require` **只允许**平台种子里的那 9 个
+  说明符：`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、
+  `@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-slots`、
+  `@deepseek-ai/dsh-client-ui-primitives`、`@deepseek-ai/dsh-client-ui-dockkit`。清单外的一切
+  （包括 `…-ui-sidebar-right` / `…-ui-conversation` 这些**引导图里的包工厂**）不保证解析：模块表查不到
+  就**抛错**，代价是整个 web app 白屏。目前产物里只有两处 `require(`：`react` 与
+  `@deepseek-ai/dsh-client-ui-primitives`（后者用来把面板画成官方组件，见 DESIGN.md §3.5），
+  由 `test/client-contract.test.ts` 扫描产物守住。元素一律 `React.createElement`（**不用 JSX**）；
+  种子包是平台提供的，**不得**写进 `dsh.client.inject`。
+- 官方组件的 props 靠 `client/react.ts` 的 `h()` 在**编译期**逐个检查：组件调用走
+  `h<P>(type: Component<P>, config: NoInfer<P> & { key? })`，`P` 只从元素类型推断（`primitives.ts`
+  里的本地结构类型 = 官方 `.d.ts` 的逐字转写），于是多余、拼错、类型不符的 prop 都是编译错误；
+  宿主元素（字符串 tag）与 `Fragment` 各走一个宽松重载。`NoInfer` 是承重的：去掉它，编译器会从
+  对象字面量反推 `P`，拼错的 prop 会**静默通过**（反例：把某个 `state:` 写成 `status:`，typecheck
+  依旧 exit 0）。测试侧的假件（`test/helpers/fake-primitives.ts`）按组件维护允许的 prop 名清单，
+  清单外的 prop 直接抛错并报出组件名，`test/fake-primitives.test.ts` 守着这份清单。
 - 每个模块头部一段 `/** … */` 说明它 owns 什么，以及**不做就会出错的那些不变量**；
   不写"我改了什么"式的注释，签名能说清的也不写注释。

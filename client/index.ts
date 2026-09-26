@@ -13,8 +13,11 @@
  *   keyed by the tab type's `id` — a `kind` key silently renders nothing;
  * - the body's registration has to be deferred through `slots.inject`, since
  *   the seat is not declared before the sidebar plugin mounts;
- * - the module table answers `react` only, so the whole half is bundled into one
- *   plain script and every element is a `createElement` call.
+ * - the module table answers a fixed seed list rather than the profile's
+ *   packages, so the whole half is bundled into one plain script, every element
+ *   is a `createElement` call, and the two specifiers it names (`react` and the
+ *   UI primitives) are pinned by the artifact scan in
+ *   `test/client-contract.test.ts`.
  */
 
 import { createNotifier, DirenvSessionHook } from './composer.ts'
@@ -27,9 +30,9 @@ import { createStatusHub } from './hub.ts'
 import { createTranslate } from './messages.ts'
 import type { PanelProps, TitleProps } from './panel.ts'
 import { DirenvGlyph, DirenvPanel, DirenvTabTitle } from './panel.ts'
+import { installPrimitives } from './primitives.ts'
 import type { RequireFn } from './react.ts'
 import { installReact } from './react.ts'
-import { installStyles } from './styles.ts'
 
 interface ModuleDefinition {
   id: string
@@ -57,6 +60,7 @@ window.__ModuleLoader__.load({
   id: PLUGIN_ID,
   factory(load) {
     installReact(load)
+    installPrimitives(load)
     return {
       name: PLUGIN_ID,
       // `slots` + `sidebarRightTabs` are the tab's two stages; `conversation`
@@ -65,8 +69,6 @@ window.__ModuleLoader__.load({
       // working tab in the detected browser language.
       inject: ['slots', 'sidebarRightTabs', 'conversation'],
       apply(ctx) {
-        installStyles()
-
         const disposers: Dispose[] = []
         const t = createTranslate(safeService(ctx, 'locale'), disposers)
         const hub = createStatusHub(ctx, t)

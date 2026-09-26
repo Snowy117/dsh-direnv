@@ -236,8 +236,12 @@ ctx.slots.inject('sidebar.right.pane.tab', () =>
 面板内容（P2）：
 
 1. **状态卡**：`.envrc` 路径、状态（加载中 / 已就绪 / 被 block / 出错 / 无 `.envrc`）、耗时、错误摘要；一个按钮——**重新加载**。（曾计划的「本工作区禁用」按钮已删除，理由见本节末。）
-2. **环境明细**：本工作区由 direnv 提供的变量清单（值默认遮蔽、可逐个展开、可搜索）、`PATH` 的**有序三态差分**（绿 = 新增、红删除线 = 被移除、默认色 = 不变；靠前 = 优先级更高，列表逐行整条显示、不做 JS 截断）。
+2. **环境明细**：本工作区由 direnv 提供的变量清单（值默认遮蔽、可逐个展开、可搜索）、`PATH` 的**有序三态差分**（绿 = 新增、红 = 被移除、灰 = 不变；靠前 = 优先级更高，列表逐行整条显示、不做 JS 截断）。
 3. **凭据名单**（D8）：命中 `/KEY|PASSWORD|SECRET|TOKEN/i` 的变量名单，明确标注「这些会出现在子进程环境中」。**只给用户看。**
+
+**面板只用官方组件画（D9 的视觉约束）**：DSH 的客户端模块表把 `@deepseek-ai/dsh-client-ui-primitives` 放在**平台种子**里（与 `react` 同级），所以 `client/primitives.ts` 直接从模块表取官方原子：状态用 `StateDot` + `Tag`（`ok→done/success`、`loading→ongoing/info`、`blocked` 等 → `warning/warning`、`error` → `error/danger`，映射表就是 `client/panel.ts` 里的 `STATE_FACES`），路径（`.envrc`、工作目录、每个 `PATH` 条目）用 `PathLabel`，字段名与分区标题用 `outline` 的 `Tag`，变量行用 `DisclosureRow`，搜索框用 `Input`，重新加载与复制用 `Button`，复制走官方 `writeClipboard`，相对时间走官方 `relativeTime`（词条仍在我们自己的字典里），悬停提示用 `Tooltip`。**本插件不写任何配色 / 圆角 / 边框 / 阴影 / 字体**：`client/styles.ts` 只剩 flex / gap / padding / min-width 这类纯布局，也不再注入 `<style>`。用户装了主题插件时，面板与 shell 一起换肤，而不是自成一套。
+
+> **为什么 `PATH` 不喂给 `DiffBlock`（评估过并否掉）**：官方 `DiffBlock` 内部是 `structuredPatch(..., { context: 3 })`，两次改动之间超过 3 行的未变条目会被折成 `⋯`，「靠前 = 优先级更高」的整条有序列表就看不全了；而 host 传来的 `pathEntries` 只有「三态 + 顺序」，把 `added` 滤掉反推 old 文本在 `PATH` 被重排时并不等于真实 base（`src/evaluator/derive.ts` 的 `diffPathEntries` 把 `unchanged` 按**新**顺序排）。所以每行渲染成一个 `Tag`（tone 三态）+ `PathLabel`，`added` 行带官方 `IconPlusOutlineRegular`（`+`）、`removed` 行带 `IconCloseOutlineRegular`（`×`），与文案表 `hint.pathOrder` 的说法一致，做到**不靠颜色也能分辨**。
 
 **不要依赖 `dsh-better-sidebar`**：DSH 0.1.7 自带这套官方右列 API，而 better-sidebar 自己（v0.19 起）就是走这套 API 的——我们的 tab 会与它的文件树/编辑器 tab 并列显示。`ctx.betterSidebar` 那个服务只管它的底部工作台，与本插件无关。
 
@@ -396,11 +400,11 @@ dsh-direnv/
 └── test/                     # 单测（含真实 direnv fixture）+ helpers/ + harness/（假 LLM 测试台与 14 个端到端用例）
 ```
 
-**为什么需要构建步骤。** TypeScript 是刻意的选择：强类型能把「承诺与实现不符」这类问题提前到编译期。而 Node 的原生类型擦除**不作用于 `node_modules`**——插件恰恰是从 profile 的 `node_modules` 里被 DSH 加载的，所以对外发布的必须是编译产物。client 半边另有独立约束：浏览器侧每个插件只能有**一个**文件（客户端模块表没有相对 `require`），因此 13 个 `client/**/*.ts` 模块由 esbuild 打成单文件 `lib/client.js`，且产物里 `react` 保持为**运行期**的宿主调用（有且仅有一次 `require(`，零 `import`/`export` 语句）。
+**为什么需要构建步骤。** TypeScript 是刻意的选择：强类型能把「承诺与实现不符」这类问题提前到编译期。而 Node 的原生类型擦除**不作用于 `node_modules`**——插件恰恰是从 profile 的 `node_modules` 里被 DSH 加载的，所以对外发布的必须是编译产物。client 半边另有独立约束：浏览器侧每个插件只能有**一个**文件（客户端模块表没有相对 `require`），因此 13 个 `client/**/*.ts` 模块由 esbuild 打成单文件 `lib/client.js`（零 `import`/`export` 语句）。模块表只回答那 9 个**平台种子**说明符，所以产物里的 `require(` **只能**是 `react` 与 `@deepseek-ai/dsh-client-ui-primitives`（客户端插件就是靠后者用官方组件画面板，见 §3.5）；写错任何一个都会在工厂里抛错、整个 web app 白屏，因此 `test/client-contract.test.ts` 会扫出产物里**每一个** `require("…")` 并逐个对着种子清单断言，`test/helpers/client-harness.ts` 的假模块表也会对清单外的说明符抛错。
 
 **开发期不需要构建也能跑测试。** `node --test 'test/*.test.ts'` 与 `node test/client-boot.ts` 直接吃 TS 源码（Node ≥ 22.18 的原生类型擦除，无需 loader），只有契约测试要读打包产物，所以 `npm test` 仍先跑一次 build。
 
-**规模纪律。** 每个 `.ts` 源文件的有效行（非空、且非纯注释行）≤ 400，测试与测试台 ≤ 600。当前实测 62 个 TS 文件、9,215 有效行；最大源文件 337 有效行（`src/evaluator/classify.ts`），最大测试文件 525（`test/evaluator-runtime.test.ts`）。
+**规模纪律。** 每个 `.ts` 源文件的有效行（非空、且非纯注释行）≤ 400，测试与测试台 ≤ 600。当前实测 **66 个 TS 文件、10,020 有效行**；最大源文件 **341**（`src/types.ts`），最大测试文件 **579**（`test/client-contract.test.ts`）。计数口径（可复现）：跳过空行、`//` 行、`/* */` 独占行及其 `*` 续行，其余计入。
 
 `package.json` 的关键字段（核查定稿）：
 
@@ -480,7 +484,7 @@ dsh-direnv/
 | 5 | `unset` 墓碑真的删掉继承变量 | `FOO=inherited` + `.envrc` 里 `unset FOO` → 子进程 `env` 里没有 `FOO` |
 | 6 | 门闸：`pre-execute` 阻塞期间对话/流式正常，且不触发工具超时 | 阻塞 10s，模型侧无报错，UI 是 running 卡片 |
 | 7 | `agent/created` 里 fire-and-forget 不会拖慢/破坏会话创建 | 创建耗时无变化，且后台加载能跑完 |
-| 8 | client 半边：composer 占位符生效；右列 tab 与 better-sidebar 共存 | GUI 目视 |
+| 8 | client 半边：composer 占位符生效；右列 tab 与 better-sidebar 共存；**面板全部由官方组件绘制，装主题插件时跟着 shell 换肤**（§3.5） | GUI 目视 |
 | 9 | `spawnTerminal` 路径（侧边栏终端）吃到 direnv | 终端里 `env \| grep` 命中 |
 | 10 | 凭据注入与名单：`.envrc` 里放一个 `GITHUB_TOKEN`，确认子进程能看到、且 sidebar 名单列出它、模型上下文里**没有**它 | 三条同时成立 |
 
@@ -622,6 +626,8 @@ HMR 循环：`hmr` 行 `config.root = ["<仓库根>"]`，`npm run build` 写出 
 - 它还被排进了**应用批预载**（combo 的 `preload` 链接里包含 `plugins/??dsh-direnv/client.js`），说明 `platform: "web"` 被正确接受，不属于"字符串但不等于 web"那种静默丢弃。
 - 取回模块本身：`http=200 bytes=57016`，与构建产物 `lib/client.js`（56949 B）**前 56949 字节逐字节相同**，多出的 67 字节正是官方分发层追加的 `;\n//# sourceMappingURL=??dsh-direnv/client.js.map&rev=…`。
 - 官方 `dsh-client-ui-sidebar-right` 仍在载荷里（我们没有顶掉它）。
+
+**改用官方组件重绘面板后的同一套验收（本轮实测）**：产物 `lib/client.js` 53520 B，全文只有两处运行期 `require(`，说明符恰好是 `react` 与 `@deepseek-ai/dsh-client-ui-primitives`——两者都在模块表的 9 项平台种子里，所以「说明符写错 ⇒ 整个 web app 白屏」这条现在有自动化防线：`test/client-contract.test.ts` 的 `the artifact requires nothing outside the client module table seed list` 会扫出产物里每一个 `require("…")` 并与种子清单逐个比对。变异复检两条，都是红的、且逐字节还原（`client/primitives.ts` md5 `767c2873…`、`client/panel.ts` md5 `1535c93e…`）：① 把 `…-ui-primitives` 写成 `…-ui-primitiv` → 该用例红（`@deepseek-ai/dsh-client-ui-primitiv is part of the module table's seed list`），同时 18 个契约用例因假模块表抛错而红；② 把渲染处的 `UI.StateDot` 写成 `UI.StateDots` → 16 个契约用例红（`the official primitives carry no StateDots`，`client/primitives.ts` 的 `guard()` 在渲染读上也拦住了名字写错）。`node test/client-boot.ts` 21/21 PASS（取回 `bytes=53587`，与产物前 53520 字节逐字节相同 + 67 字节 sourceMappingURL 尾巴），`test/harness/run.sh direnv-smoke` 15/15 PASS。
 
 > 仍未验证（无浏览器）：tab 是否真的渲染出来、composer 是否真的变灰、Toast 是否真的 3 秒消失、真实 `SlotCore` 的抛错路径与 CSS 布局。这些只能在有浏览器的环境里过一遍。
 

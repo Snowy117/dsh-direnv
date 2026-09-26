@@ -21,6 +21,7 @@ import path from 'node:path'
 
 import { brokenJsonReply, createHarness, errorReply, jsonReply, spaFallbackReply } from './helpers/client-harness.ts'
 import type { Harness, HarnessOptions } from './helpers/client-harness.ts'
+import type { ElementInstance, Instance } from './helpers/fake-react.ts'
 import { isRecord } from './helpers/guards.ts'
 import { CLIENT_FILE, REPO } from './helpers/package-manifest.ts'
 
@@ -33,6 +34,9 @@ const VARIABLES = [
   { name: 'PATH', sensitive: false, hasValue: true },
 ]
 const VALUES = { API_TOKEN: 'tok-live-123', EDITOR: 'vim', PATH: '/work/ws-contract/bin:/usr/bin' }
+
+/** The one host timestamp every envelope carries, so the clock assertion is not a moving target. */
+const AT = 1_737_000_000_000
 
 /** One `PATH` diff entry exactly as the host serializes it. */
 interface EnvelopePathEntry {
@@ -98,7 +102,7 @@ function envelope({ state = 'ok', env = null, overrides = {} }: EnvelopeOptions 
     status: {
       dir: DIR,
       state,
-      at: 1_737_000_000_000,
+      at: AT,
       ms: 1234,
       envrcPath: `${DIR}/.envrc`,
       memoHit: true,
@@ -135,22 +139,47 @@ function withHarness(t: TestContext, options: HarnessOptions): Promise<Harness> 
   })
 }
 
-/** The props of the one `PATH` row carrying `change`, exactly as it was rendered. */
-function pathRow(harness: Harness, panel: number, change: string): Record<string, unknown> {
-  const found = harness.react.findAll(
-    panel,
-    (instance) => instance.kind === 'host' && instance.props.className === `dsh-direnv-path dsh-direnv-path-${change}`,
-  )
-  const row = found[0]
-  if (row === undefined || row.kind === 'text') throw new Error(`the panel rendered no ${change} PATH row`)
-  return row.props
+/**
+ * The official primitives the module table's seed list answers. The bundle may
+ * name a specifier outside this list only by white-screening the whole web app,
+ * so the artifact is scanned for every one of them below.
+ */
+const SEED_MODULES = new Set([
+  'react',
+  'react/jsx-runtime',
+  'react-dom',
+  'react-dom/client',
+  '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-client-ui-slots',
+  '@deepseek-ai/dsh-client-ui-primitives',
+  '@deepseek-ai/dsh-client-ui-dockkit',
+])
+
+/** The official component the panel rendered for one path, or null when it rendered none. */
+function pathLabelOf(harness: Harness, panel: number, path: string): ElementInstance | null {
+  return harness.primitives(panel, 'PathLabel').find((instance) => instance.props.path === path) ?? null
 }
 
-/** The rendered style of a row, read back as the plain object React was handed. */
-function styleOf(props: Record<string, unknown>): Record<string, unknown> {
-  const style = props.style
-  if (style === null || typeof style !== 'object') throw new Error('the row carries no style object')
-  return style as Record<string, unknown>
+/** The nearest ancestor (or the node itself) that is one official primitive. */
+function ancestorPrimitive(harness: Harness, node: Instance, name: string): ElementInstance | null {
+  let current: Instance | null = node
+  while (current !== null) {
+    if (current.kind !== 'text' && harness.primitiveName(current.type) === name) return current
+    current = current.parent
+  }
+  return null
+}
+
+/** Whether one official primitive is rendered anywhere under a node. */
+function containsPrimitive(harness: Harness, node: Instance, name: string): boolean {
+  if (node.kind !== 'text' && harness.primitiveName(node.type) === name) return true
+  return node.children.some((child) => containsPrimitive(harness, child, name))
+}
+
+/** Every `Tag` whose own text carries a fragment, in tree order. */
+function tagsWithText(harness: Harness, panel: number, fragment: string): ElementInstance[] {
+  return harness.primitives(panel, 'Tag').filter((instance) => harness.react.textUnder(instance).includes(fragment))
 }
 
 test('a real host envelope renders the panel instead of "status unavailable"', async (t) => {
@@ -174,6 +203,20 @@ test('a real host envelope renders the panel instead of "status unavailable"', a
   assert.ok(text.includes(DIR), 'the resolved directory is rendered')
   assert.ok(text.includes('3 entries'), 'the variable count is rendered')
 
+  // The status is one official dot plus one official tag, never a hand-drawn pill.
+  assert.equal(harness.primitives(panel, 'StateDot')[0]?.props.state, 'done', 'a ready workspace is the done dot')
+  assert.equal(tagsWithText(harness, panel, 'Ready')[0]?.props.tone, 'success', 'and it wears the success tone')
+
+  // The variable count rides one official pill, and the updated time one
+  // official tooltip: labelled with the host clock, portaled, and rendering the
+  // relative age as the child it was handed.
+  assert.equal(harness.primitives(panel, 'Pill')[0]?.props.children, '3 entries', 'the count is one official pill')
+  const age = harness.primitives(panel, 'Tooltip').find((tip) => tip.props.label === new Date(AT).toLocaleTimeString())
+  assert.ok(age !== undefined, 'the updated time is an official tooltip labelled with the host clock')
+  assert.equal(age.props.portal, true, 'the tooltip asks for the body portal')
+  const ageText = harness.react.textUnder(age)
+  assert.ok(ageText !== '' && harness.react.textOf(panel).includes(ageText), 'the tooltip renders the age as its child')
+
   // The failure signature of the envelope bug: no route-down pill, no transport
   // error in the footer.
   assert.ok(!text.includes('Status unavailable'), 'the panel does not report the status route as down')
@@ -182,40 +225,46 @@ test('a real host envelope renders the panel instead of "status unavailable"', a
   assert.deepEqual(harness.errorLines, [], 'the client logged no internal error')
 })
 
-test('the three PATH states render one row each, with their own colour and decoration', async (t) => {
+test('each PATH transition renders as one official tag, in host order, marked without colour', async (t) => {
   const harness = await withHarness(t, { responder: () => jsonReply(envelope()) })
   const panel = harness.mountPanel()
   await harness.settle()
 
-  const rows = harness.react.findAll(
-    panel,
-    (instance) => instance.kind === 'host' && typeof instance.props.className === 'string' && instance.props.className.includes('dsh-direnv-path-'),
-  )
-  assert.equal(rows.length, PATH_ENTRIES.length, 'one row per diff entry, duplicates included')
+  const TONES: Record<string, string> = { added: 'success', removed: 'danger', unchanged: 'neutral' }
+  const MARKS: Record<string, string | null> = {
+    added: 'IconPlusOutlineRegular',
+    removed: 'IconCloseOutlineRegular',
+    unchanged: null,
+  }
 
-  const added = styleOf(pathRow(harness, panel, 'added'))
-  assert.equal(added.color, 'var(--dsw-alias-state-success-primary)', 'an added entry takes the theme success colour')
-  assert.equal(added.textDecoration, undefined, 'an added entry carries no removed-only decoration')
+  for (const entry of PATH_ENTRIES) {
+    const label = pathLabelOf(harness, panel, entry.value)
+    assert.ok(label !== null, `the panel renders ${entry.value} through the official PathLabel`)
+    const tag = ancestorPrimitive(harness, label, 'Tag')
+    assert.ok(tag !== null, `${entry.value} is rendered inside an official tag`)
+    assert.equal(tag.props.tone, TONES[entry.change], `a ${entry.change} entry takes the ${String(TONES[entry.change])} tone`)
+    // Removal has to stay readable without colour, so each changed state carries
+    // its own official icon and an unchanged entry carries neither.
+    const mark = MARKS[entry.change] ?? null
+    for (const candidate of ['IconPlusOutlineRegular', 'IconCloseOutlineRegular']) {
+      assert.equal(
+        containsPrimitive(harness, tag, candidate),
+        mark === candidate,
+        `a ${entry.change} entry ${mark === candidate ? 'carries' : 'carries no'} ${candidate}`,
+      )
+    }
+  }
 
-  const removed = styleOf(pathRow(harness, panel, 'removed'))
-  assert.equal(removed.color, 'var(--dsw-alias-state-error-primary)', 'a removed entry takes the theme error colour')
-  assert.equal(removed.textDecoration, 'line-through', 'a removed entry is struck through, so colour is not the only cue')
-
-  const unchanged = styleOf(pathRow(harness, panel, 'unchanged'))
-  assert.equal(unchanged.color, 'var(--dsw-alias-label-primary)', 'an unchanged entry keeps the default foreground')
-
-  const order = rows.map((instance) =>
-    instance.kind === 'text' ? '' : String(instance.props.className).replace('dsh-direnv-path dsh-direnv-path-', ''),
-  )
-  assert.deepEqual(order, PATH_ENTRIES.map((entry) => entry.change), 'the host order is preserved: earlier means higher priority')
-  const titles = rows.map((instance) => (instance.kind === 'text' ? null : instance.props.title))
-  assert.deepEqual(titles, PATH_ENTRIES.map((entry) => entry.value), 'every row keeps its full value in title')
+  const rendered = harness.primitives(panel, 'PathLabel')
+    .map((instance) => String(instance.props.path))
+    .filter((path) => PATH_ENTRIES.some((entry) => entry.value === path))
+  assert.deepEqual(rendered, PATH_ENTRIES.map((entry) => entry.value), 'the host order is preserved: earlier means higher priority')
 
   const text = harness.react.textOf(panel)
   assert.ok(text.includes('Earlier entries take precedence'), 'the order/colour legend is rendered')
 })
 
-test('a long path reaches the DOM whole; only CSS may shorten it', async (t) => {
+test('a long path reaches the official PathLabel whole, and nothing shortens it in JavaScript', async (t) => {
   const longDir = `${DIR}/${'deep/'.repeat(20)}workspace`
   const longBin = `${longDir}/bin`
   const longEnvrc = `${longDir}/.envrc`
@@ -240,27 +289,20 @@ test('a long path reaches the DOM whole; only CSS may shorten it', async (t) => 
   assert.ok(text.includes(longEnvrc), 'the .envrc row carries the whole path')
   assert.ok(!text.includes('\u2026'), 'no path was cut in JavaScript')
 
-  assert.equal(pathRow(harness, panel, 'added').title, longBin, 'the PATH row keeps the full value in title')
-  const titled = harness.react.findAll(panel, (instance) => instance.kind === 'host' && instance.props.title === longDir)
-  assert.equal(titled.length, 1, 'the truncated directory row still carries the full value in title')
-
-  // The DOM always held the whole path; what matters is that nothing clips it, so
-  // lock the wrapping decision down per row: the fields people read must wrap, and
-  // only the footer's one-line poll status is allowed to use the CSS ellipsis.
-  for (const [label, value] of [
+  // The panel's share of the contract is the value it hands over: PathLabel owns
+  // the fit, and its own `title` (mirrored by the stub) is where the whole path
+  // stays reachable when the sidebar is too narrow to draw it.
+  const fields: [string, string][] = [
     ['directory', longDir],
     ['envrc', longEnvrc],
     ['PATH entry', longBin],
-  ]) {
-    const rows = harness.react.findAll(panel, (instance) => instance.kind === 'host' && instance.props.title === value)
-    assert.ok(rows.length > 0, `the ${label} row exists`)
-    for (const row of rows) {
-      assert.notEqual(row.props.style?.textOverflow, 'ellipsis', `the ${label} row must not clip`)
-    }
-    assert.ok(
-      rows.some((row) => row.props.style?.overflowWrap === 'anywhere'),
-      `the ${label} row wraps instead of clipping`,
-    )
+  ]
+  for (const [label, value] of fields) {
+    const rendered = pathLabelOf(harness, panel, value)
+    assert.ok(rendered !== null, `the ${label} is rendered by the official PathLabel`)
+    assert.equal(rendered.props.path, value, `PathLabel receives the whole ${label}`)
+    const host = rendered.children[0]
+    assert.ok(host !== undefined && host.kind !== 'text' && host.props.title === value, `the whole ${label} stays on hover`)
   }
 })
 
@@ -271,11 +313,10 @@ test('an empty PATH component names the current directory instead of reading as 
   const panel = harness.mountPanel()
   await harness.settle()
 
-  const rows = harness.react.findAll(
-    panel,
-    (instance) => instance.kind === 'host' && instance.props.className === 'dsh-direnv-path dsh-direnv-path-added',
-  )
+  const rows = tagsWithText(harness, panel, '(empty → current directory)')
   assert.equal(rows.length, 1, 'the empty component still renders its own PATH row')
+  assert.equal(rows[0]!.props.tone, 'success', 'and it keeps the tone of its own transition')
+  assert.equal(pathLabelOf(harness, panel, ''), null, 'an empty component is not handed to PathLabel, which would draw nothing')
   const text = harness.react.textOf(panel)
   assert.ok(text.includes('(empty → current directory)'), 'the empty component says what POSIX gives it: the current directory')
   assert.ok(!text.includes('(empty)'), 'the old "this entry has no content" reading is gone')
@@ -325,15 +366,15 @@ test('no hide/show control survives, in either language', async (t) => {
   const panel = harness.mountPanel()
   await harness.settle()
 
-  const buttons = harness.react.findAll(
-    panel,
-    (instance) => instance.kind === 'host' && instance.props.className === 'dsh-direnv-btn',
-  )
+  const buttons = harness.primitives(panel, 'Button')
   assert.equal(buttons.length, 1, 'the status card now has exactly one action: reload')
-  const text = harness.react.textOf(panel)
+  const reload = buttons[0]!
+  assert.equal(reload.props.variant, 'outline', 'the reload action is an official button, not a hand-drawn one')
+  assert.equal(reload.props.disabled, false, 'and it is live while no reload is in flight')
+  const text = harness.react.textUnder(reload)
   assert.ok(text.includes('Reload'), 'the surviving button is the reload action')
   for (const gone of ['Hide this panel', 'Show the panel again', 'Panel hidden in this session', 'Polling paused']) {
-    assert.ok(!text.includes(gone), `the panel no longer renders "${gone}"`)
+    assert.ok(!harness.react.textOf(panel).includes(gone), `the panel no longer renders "${gone}"`)
   }
 })
 
@@ -384,20 +425,101 @@ test('expanding a row asks the host for values, and collapsing stops asking', as
   await harness.settle()
 
   assert.ok(!harness.lastUrl()!.includes('values=1'), 'the default poll does not pull secret values')
-  let row = harness.react.findByClass(panel, 'dsh-direnv-row')
-  assert.ok(row !== null, 'the variable list rendered a row')
+  let row = harness.primitives(panel, 'DisclosureRow')[0]
+  assert.ok(row !== undefined, 'the variable list rendered a disclosure row')
 
-  harness.react.click(row)
+  harness.react.clickInside(row)
   await harness.settle()
   assert.ok(harness.lastUrl()!.includes('values=1'), 'expanding a row adds values=1 to the poll')
   assert.ok(harness.react.textOf(panel).includes('tok-live-123'), 'the revealed row shows the original value')
 
-  row = harness.react.findByClass(panel, 'dsh-direnv-row')
-  harness.react.click(row!)
+  row = harness.primitives(panel, 'DisclosureRow')[0]
+  harness.react.clickInside(row!)
   await harness.settle()
   harness.tick()
   await harness.settle()
   assert.ok(!harness.lastUrl()!.includes('values=1'), 'collapsing every row stops asking for values')
+})
+
+test('a variable row discloses on the official row, and copying goes through writeClipboard', async (t) => {
+  const responder = (call: { url: string }) =>
+    jsonReply(envelope({ env: call.url.includes('values=1') ? { ...VALUES } : null }))
+  const harness = await withHarness(t, { responder })
+  const panel = harness.mountPanel()
+  await harness.settle()
+
+  const row = harness.primitives(panel, 'DisclosureRow').find((instance) => instance.props.title === 'EDITOR')
+  assert.ok(row !== undefined, 'each variable is one official disclosure row')
+  assert.equal(row.props.expandable, true, 'the row is the disclosure control')
+  assert.equal(row.props.open, false, 'and it starts closed')
+  assert.equal(row.props.keepContentWhenOpen, true, 'the collapsed content stays inline once the row opens')
+  const collapsed = row.props.collapsedContent
+  assert.ok(isRecord(collapsed), 'a closed row carries its collapsed content')
+  assert.equal(harness.primitiveName(collapsed.type), 'Tooltip', 'which is the official tooltip')
+  const tip: Record<string, unknown> = isRecord(collapsed.props) ? collapsed.props : {}
+  assert.equal(tip.label, 'Click to reveal the value', 'labelled with the reveal action')
+  assert.equal(tip.portal, true, 'and portaled out of the row that would clip it')
+  assert.ok(!harness.react.textOf(panel).includes('vim'), 'a closed row keeps the value off screen')
+
+  harness.react.clickInside(row)
+  await harness.settle()
+  assert.ok(harness.react.textOf(panel).includes('vim'), 'the open row shows the value')
+
+  const copy = harness.primitives(panel, 'Button').find((instance) => instance.props.title === 'Copy variable name')
+  assert.ok(copy !== undefined, 'the open row offers the official copy action')
+  harness.react.click(copy)
+  await harness.settle()
+  assert.deepEqual(harness.clipboard, ['EDITOR'], 'the name, and only the name, went to the official clipboard')
+  assert.ok(harness.react.textOf(panel).includes('Copied'), 'the copy is acknowledged in the panel')
+})
+
+test('the variable search field is the official input, and it filters the rows', async (t) => {
+  const many = ['EDITOR', 'FOO', 'GIT_PAGER', 'LESS', 'MANPAGER', 'PAGER', 'TERM'].map((name) => ({
+    name,
+    sensitive: false,
+    hasValue: true,
+  }))
+  const harness = await withHarness(t, { responder: () => jsonReply(envelope({ overrides: { variables: many } })) })
+  const panel = harness.mountPanel()
+  await harness.settle()
+
+  const search = harness.primitives(panel, 'Input')[0]
+  assert.ok(search !== undefined, 'more than six variables bring up the official search input')
+  assert.equal(search.props.type, 'search', 'and it is a search field')
+  const field = harness.react.findAll(panel, (instance) => instance.kind === 'host' && instance.type === 'input')[0]
+  assert.ok(field !== undefined && field.kind !== 'text', 'the input renders a native field')
+  const onChange = field.props.onChange
+  assert.equal(typeof onChange, 'function', 'and the panel listens to it')
+  ;(onChange as (event: unknown) => void)({ target: { value: 'edit' } })
+  harness.react.flush()
+
+  const titles = harness.primitives(panel, 'DisclosureRow').map((instance) => String(instance.props.title))
+  assert.deepEqual(titles, ['EDITOR'], 'only the matching variable row survives the filter')
+  assert.equal(harness.primitives(panel, 'Input')[0]?.props.value, 'edit', 'the field stays controlled by the panel')
+})
+
+test('a blocked workspace shows its summary and warnings through official tags', async (t) => {
+  const harness = await withHarness(t, {
+    responder: () =>
+      jsonReply(
+        envelope({
+          state: 'blocked',
+          overrides: {
+            errorSummary: `${DIR}/.envrc is blocked. Run \`direnv allow\` to approve its content`,
+            warnings: ['direnv 2.37.1 is older than this plugin expects'],
+          },
+        }),
+      ),
+  })
+  const panel = harness.mountPanel()
+  await harness.settle()
+
+  const text = harness.react.textOf(panel)
+  assert.ok(text.includes('direnv allow'), 'the actionable summary reaches the panel whole')
+  assert.ok(text.includes('direnv 2.37.1 is older'), 'and so does every warning')
+  assert.equal(harness.primitives(panel, 'StateDot')[0]?.props.state, 'warning', '`blocked` is amber, not a failure')
+  assert.equal(tagsWithText(harness, panel, 'Error summary')[0]?.props.tone, 'danger', 'the summary is labelled as a failure')
+  assert.equal(tagsWithText(harness, panel, 'Warnings')[0]?.props.tone, 'warning', 'the warnings carry the attention tone')
 })
 
 test('hostile responses stay silent: no throw, no false toast, no blocked input', async (t) => {
@@ -407,6 +529,8 @@ test('hostile responses stay silent: no throw, no false toast, no blocked input'
   await harness.settle()
 
   assert.ok(harness.react.textOf(panel).includes('Status unavailable'), 'a 404 reads as a route-down panel')
+  assert.equal(tagsWithText(harness, panel, 'Status unavailable')[0]?.props.tone, 'danger', 'and the notice is a danger tag')
+  assert.equal(harness.primitives(panel, 'StateDot')[0]?.props.state, 'error', 'with the error dot beside it')
   assert.equal(harness.blocks.current(SESSION), undefined, 'a 404 never blocks the composer')
   assert.deepEqual(harness.notifications, [], 'a 404 raises no failure toast')
   assert.deepEqual(harness.errorLines, [], 'a 404 logs no internal error')
@@ -561,9 +685,35 @@ test('the three message tables stay in sync, and the dead keys stay deleted', ()
     for (const key of deleted) {
       assert.ok(!keys.has(key), `${label} no longer carries the dead ${key} key`)
     }
-    assert.ok(keys.has('hint.pathOrder'), `${label} carries the order/colour legend`)
-    assert.ok(keys.has('hint.pathEmpty'), `${label} carries the empty-component placeholder`)
-    assert.ok(keys.has('hint.pathUnset'), `${label} carries the unset-PATH notice`)
-    assert.equal(keys.size, 59, `${label} is 59 keys wide`)
+    for (const key of [
+      'hint.pathOrder',
+      'hint.pathEmpty',
+      'hint.pathUnset',
+      // The official relative-time buckets hand over no words of their own.
+      'time.now',
+      'time.minutes',
+      'time.hours',
+      'time.days',
+      'time.months',
+      'time.years',
+    ]) {
+      assert.ok(keys.has(key), `${label} carries ${key}`)
+    }
+    assert.equal(keys.size, 65, `${label} is 65 keys wide`)
   }
+})
+
+test('the artifact requires nothing outside the client module table seed list', () => {
+  const source = fs.readFileSync(CLIENT_FILE, 'utf8')
+  const specifiers = [...source.matchAll(/\brequire\(\s*(["'])([^"']+)\1\s*\)/g)].map((match) => match[2])
+
+  // A specifier the table cannot answer throws inside the plugin factory, which
+  // is a white-screened web app rather than a quiet panel: every call site has to
+  // be scanned, not just the one this test happens to know about.
+  assert.ok(specifiers.length >= 2, 'the artifact still reaches the host module table')
+  for (const specifier of specifiers) {
+    assert.ok(SEED_MODULES.has(specifier!), `${specifier} is part of the module table's seed list`)
+  }
+  assert.ok(specifiers.includes('react'), 'the artifact loads react from the table')
+  assert.ok(specifiers.includes('@deepseek-ai/dsh-client-ui-primitives'), 'and the official primitives')
 })

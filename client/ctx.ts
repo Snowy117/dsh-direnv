@@ -65,11 +65,6 @@ export function isUnknownArray(value: unknown): value is readonly unknown[] {
   return Array.isArray(value)
 }
 
-/** A thenable, however exotic, for the clipboard's take-it-or-leave-it courtesy. */
-export function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return value !== null && typeof value === 'object' && typeof (value as PromiseLike<unknown>).then === 'function'
-}
-
 /** One service, by the route the context prefers, then by property access. */
 export function safeService(ctx: ClientContext, name: string): unknown {
   try {

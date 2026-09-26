@@ -1,14 +1,18 @@
 /**
- * The right-column panel: the header with its state pill, the status card and
- * the environment sections. It renders whatever the last poll answered and never
- * blocks: a poll in flight leaves the previous answer on screen, and a failed
- * poll says so in the footer instead of emptying the panel.
+ * The right-column panel: the status card, the environment sections and the
+ * footer. It renders whatever the last poll answered and never blocks: a poll in
+ * flight leaves the previous answer on screen, and a failed poll says so in the
+ * footer instead of emptying the panel.
  *
- * Paths are never shortened in JavaScript, and the path fields people actually
- * read (the working directory, the `.envrc` it comes from, every PATH entry) wrap
- * instead of being clipped, so a deep path stays readable and copyable; only the
- * footer's one-line poll status still truncates through CSS. Every wrapped field
- * keeps its full value in `title` as well.
+ * Every block here is an official primitive (`client/primitives.ts`), or plain
+ * text where the shell's own type is the right one; the panel owns no color,
+ * radius, border, shadow or font, so an installed theme restyles it together
+ * with the rest of the shell. Paths are never shortened in JavaScript:
+ * `PathLabel` renders the whole string, fades it at the left edge when the
+ * sidebar is too narrow, and keeps the complete value in its own `title`, which
+ * is the one hover a path needs. Status becomes exactly one dot state and one
+ * tag tone — see `STATE_FACES`, the only place a host state turns into an
+ * official semantic.
  *
  * The keyed seats this component fills are registered in `index.ts`; the key
  * there is the tab type's `id`, because a `kind` key silently renders nothing.
@@ -18,9 +22,10 @@ import { POLL_MS } from './constants.ts'
 import { firstLine, formatClock, formatMs } from './format.ts'
 import type { StatusHub, StatusState } from './hub.ts'
 import type { Translate } from './messages.ts'
+import type { DotState, TagTone } from './primitives.ts'
+import { ui } from './primitives.ts'
 import { h, fragment, useEffect, useState } from './react.ts'
-import { S } from './styles.ts'
-import type { ToneName } from './styles.ts'
+import { L } from './styles.ts'
 import { Credentials, EnvDetails, PathEntries, pathWasRemoved } from './env-details.ts'
 
 export interface PanelProps {
@@ -38,19 +43,43 @@ export interface GlyphProps {
   className?: string | undefined
 }
 
-const STATE_TONES: Record<string, ToneName> = {
-  ok: 'success',
-  loading: 'idle',
-  idle: 'idle',
-  absent: 'idle',
-  disabled: 'idle',
-  unreadable: 'warn',
-  blocked: 'warn',
-  'envrc-failed': 'warn',
-  'config-error': 'warn',
-  'direnv-unavailable': 'warn',
-  'route-down': 'warn',
-  error: 'error',
+interface StateFace {
+  readonly dot: DotState
+  readonly tone: TagTone
+}
+
+/**
+ * The status mapping: a settled workspace is `done`, a load in flight is the
+ * ongoing dot, a state that needs the operator but has not failed is amber, and
+ * only a failure is red. Every host state the evaluator can report has a face
+ * (see `src/types.ts`), so none of them can fall through to a grey default.
+ */
+const STATE_FACES: Record<string, StateFace> = {
+  ok: { dot: 'done', tone: 'success' },
+  loading: { dot: 'ongoing', tone: 'info' },
+  idle: { dot: 'idle', tone: 'neutral' },
+  absent: { dot: 'idle', tone: 'neutral' },
+  disabled: { dot: 'idle', tone: 'quiet' },
+  unreadable: { dot: 'warning', tone: 'warning' },
+  blocked: { dot: 'warning', tone: 'warning' },
+  'envrc-failed': { dot: 'warning', tone: 'warning' },
+  'config-error': { dot: 'warning', tone: 'warning' },
+  'direnv-unavailable': { dot: 'warning', tone: 'warning' },
+  'route-down': { dot: 'error', tone: 'danger' },
+  error: { dot: 'error', tone: 'danger' },
+}
+
+/** A state this build has never heard of is reported, never hidden. */
+const UNKNOWN_FACE: StateFace = { dot: 'warning', tone: 'warning' }
+
+/** The official bucket, worded by our own dictionary — the package ships no copy. */
+const TIME_KEYS: Record<string, string> = {
+  now: 'time.now',
+  minutes: 'time.minutes',
+  hours: 'time.hours',
+  days: 'time.days',
+  months: 'time.months',
+  years: 'time.years',
 }
 
 function stateLabel(t: Translate, state: string): string {
@@ -99,46 +128,14 @@ export function DirenvGlyph(props: GlyphProps): unknown {
   )
 }
 
-function Tone(props: { tone: ToneName; children?: unknown }): unknown {
-  const style = S.tones[props.tone] ?? S.tones.idle
-  return h('span', { style: { ...S.pillBase, ...style } }, props.children)
-}
-
-function Line(props: {
-  label: unknown
-  mono?: boolean | undefined
-  /** A single-line field: CSS ellipsis, with the full value left in `title`. */
-  truncate?: boolean | undefined
-  title?: string | undefined
-  children?: unknown
-}): unknown {
-  const style = { ...S.value, ...(props.mono === true ? S.mono : {}), ...(props.truncate === true ? S.truncate : {}) }
+/** One named fact: the official outline tag as the label, the value beside it. */
+function Fact(props: { label: string; tone?: TagTone | undefined; wide?: boolean | undefined; children?: unknown }): unknown {
+  const UI = ui()
   return h(
     'div',
-    { style: S.row },
-    h('span', { style: S.label }, props.label),
-    h('span', { style: style, title: props.title }, props.children),
-  )
-}
-
-function Button(props: {
-  disabled?: boolean | undefined
-  title?: string | undefined
-  onClick?: (() => void) | undefined
-  children?: unknown
-}): unknown {
-  const style = { ...S.button, ...(props.disabled === true ? S.buttonDisabled : {}) }
-  return h(
-    'button',
-    {
-      type: 'button',
-      className: 'dsh-direnv-btn',
-      style: style,
-      disabled: props.disabled === true,
-      title: props.title,
-      onClick: props.disabled === true ? undefined : props.onClick,
-    },
-    props.children,
+    { style: L.row },
+    h(UI.Tag, { key: 'label', tone: props.tone ?? 'outline', children: props.label }),
+    h('div', { key: 'value', style: props.wide === true ? L.block : L.value }, props.children),
   )
 }
 
@@ -160,13 +157,14 @@ function useStatus(hub: StatusHub, sessionId: string | undefined): StatusState |
 }
 
 export function DirenvPanel(props: PanelProps): unknown {
+  const UI = ui()
   const t = props.t
   const hub = props.hub
   const sessionId = props.sessionId
   const snapshot = useStatus(hub, sessionId)
 
   if (!sessionId) {
-    return h('div', { style: S.root }, h('div', { style: S.muted }, t('hint.noSession')))
+    return h('div', { style: L.root }, h('span', { style: L.text }, t('hint.noSession')))
   }
 
   const record = snapshot !== null && snapshot !== undefined ? snapshot.record : null
@@ -188,10 +186,13 @@ export function DirenvPanel(props: PanelProps): unknown {
   }
 
   const state = record !== null ? record.state : transportError !== null ? 'route-down' : answered ? 'idle' : 'loading'
-  const tone = STATE_TONES[state] ?? 'warn'
+  const face = STATE_FACES[state] ?? UNKNOWN_FACE
   const envrcPath = record !== null ? record.envrcPath : null
   const duration = record !== null ? formatMs(record.ms) : null
-  const clock = record !== null ? formatClock(record.at) : null
+  const at = record !== null ? record.at : null
+  const clock = at === null ? null : formatClock(at)
+  const bucket = at === null || clock === null ? null : UI.relativeTime(at, Date.now())
+  const age = bucket === null ? null : t(TIME_KEYS[bucket.unit] ?? 'time.now', { n: bucket.n })
   const dir = record !== null ? record.dir : ''
   const pollText = `${t('hint.poll', { seconds: Math.round(POLL_MS / 100) / 10 })}${dir !== '' ? ` · ${dir}` : ''}`
 
@@ -203,58 +204,77 @@ export function DirenvPanel(props: PanelProps): unknown {
   const children: unknown[] = [
     h(
       'div',
-      { key: 'head', style: S.row },
-      h('span', { style: { ...S.value, fontWeight: 600 } }, t('tab')),
-      h('span', { style: S.spacer }),
-      h(Tone, { key: 'tone', tone: tone }, stateLabel(t, state)),
-    ),
-  ]
-
-  children.push(
-    h(
-      'div',
-      { key: 'status', style: S.card },
-      envrcPath !== null
-        ? h(Line, { key: 'envrc', label: t('label.envrcPath'), mono: true, title: envrcPath }, envrcPath)
-        : h(Line, { key: 'envrc', label: t('label.envrcPath') }, t('hint.valueUnset')),
-      dir !== '' ? h(Line, { key: 'dir', label: t('label.dir'), mono: true, title: dir }, dir) : null,
-      duration !== null ? h(Line, { key: 'ms', label: t('label.duration') }, duration) : null,
-      clock !== null ? h(Line, { key: 'at', label: t('label.updated') }, clock) : null,
+      { key: 'status', style: L.group },
       h(
-        Line,
-        { key: 'memo', label: t('label.memoHit') },
-        record !== null && record.memoHit ? t('label.memoHitYes') : t('label.memoHitNo'),
+        'div',
+        { key: 'state', style: L.chips },
+        h(UI.StateDot, { key: 'dot', state: face.dot }),
+        h(UI.Tag, { key: 'label', tone: face.tone, children: stateLabel(t, state) }),
       ),
+      envrcPath !== null
+        ? h(Fact, { key: 'envrc', label: t('label.envrcPath'), children: h(UI.PathLabel, { path: envrcPath }) })
+        : h(Fact, { key: 'envrc', label: t('label.envrcPath'), children: t('hint.valueUnset') }),
+      dir !== '' ? h(Fact, { key: 'dir', label: t('label.dir'), children: h(UI.PathLabel, { path: dir }) }) : null,
+      duration !== null ? h(Fact, { key: 'ms', label: t('label.duration'), children: duration }) : null,
+      clock !== null && age !== null
+        ? h(Fact, {
+            key: 'at',
+            label: t('label.updated'),
+            children: h(UI.Tooltip, {
+              label: clock,
+              portal: true,
+              children: h('span', { style: L.inline }, age),
+            }),
+          })
+        : null,
+      h(Fact, {
+        key: 'memo',
+        label: t('label.memoHit'),
+        children: h(UI.Tag, {
+          tone: record !== null && record.memoHit ? 'success' : 'neutral',
+          children: record !== null && record.memoHit ? t('label.memoHitYes') : t('label.memoHitNo'),
+        }),
+      }),
       answered && record === null && transportError === null
-        ? h('div', { key: 'no-workspace', style: S.caption }, t('hint.noWorkspace'))
+        ? h('span', { key: 'no-workspace', style: L.text }, t('hint.noWorkspace'))
         : null,
       record !== null && record.errorSummary !== null
-        ? h(
-            'div',
-            { key: 'error', style: { ...S.card, padding: '6px 8px', background: 'transparent' } },
-            h('div', { style: S.sectionTitle }, t('label.error')),
-            h('pre', { className: 'dsh-direnv-pre', style: S.pre }, record.errorSummary),
-          )
+        ? h(Fact, {
+            key: 'error',
+            label: t('label.error'),
+            tone: 'danger',
+            wide: true,
+            children: h('div', { style: L.capped }, record.errorSummary),
+          })
         : null,
       record !== null && record.warnings.length > 0
-        ? h(
-            'div',
-            { key: 'warnings', style: S.list },
-            h('div', { style: S.sectionTitle }, t('label.warnings')),
-            record.warnings.map((warning) => h('div', { key: warning, style: S.caption }, warning)),
-          )
+        ? h(Fact, {
+            key: 'warnings',
+            label: t('label.warnings'),
+            tone: 'warning',
+            wide: true,
+            children: h(
+              'div',
+              { style: L.group },
+              record.warnings.map((warning) => h('span', { key: warning, style: L.block }, warning)),
+            ),
+          })
         : null,
       h(
         'div',
-        { key: 'actions', style: S.actions },
-        h(
-          Button,
-          { key: 'reload', disabled: forcing, title: t('action.reload'), onClick: onReload },
-          forcing ? t('action.reloading') : t('action.reload'),
-        ),
+        { key: 'actions', style: L.chips },
+        h(UI.Button, {
+          key: 'reload',
+          variant: 'outline',
+          size: 'sm',
+          icon: h(UI.IconRefreshOutlineRegular, { size: 14 }),
+          disabled: forcing,
+          onClick: onReload,
+          children: forcing ? t('action.reloading') : t('action.reload'),
+        }),
       ),
     ),
-  )
+  ]
 
   if (record !== null && record.variables.length > 0) {
     children.push(h(EnvDetails, { key: 'env', t: t, record: record, onReveal: onReveal }))
@@ -270,15 +290,20 @@ export function DirenvPanel(props: PanelProps): unknown {
   children.push(
     h(
       'div',
-      { key: 'footer', style: S.card },
+      { key: 'footer', style: L.group },
       transportError !== null
-        ? h('div', { style: S.muted }, `${t('hint.routeDown')} — ${firstLine(transportError, 80)}`)
+        ? h(
+            'div',
+            { key: 'route', style: L.row },
+            h(UI.Tag, { key: 'down', tone: 'danger', children: t('hint.routeDown') }),
+            h('span', { key: 'detail', style: L.value }, firstLine(transportError, 80)),
+          )
         : null,
-      h('div', { style: { ...S.caption, ...S.truncate }, title: pollText }, pollText),
+      h('span', { key: 'poll', style: L.text }, pollText),
     ),
   )
 
-  return h('div', { className: 'dsh-direnv-root', style: S.root }, children)
+  return h('div', { style: L.root }, children)
 }
 
 export function DirenvTabTitle(props: TitleProps): unknown {

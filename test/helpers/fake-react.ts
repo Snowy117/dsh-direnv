@@ -86,9 +86,13 @@ export interface FakeReact {
   unmount(handle: number): void
   flush(): void
   textOf(handle: number): string
+  /** The text of one node and its subtree, wherever in the tree that node sits. */
+  textUnder(instance: Instance): string
   findAll(handle: number, predicate: (instance: Instance) => boolean): Instance[]
   findByClass(handle: number, className: string): Instance | null
   click(node: Instance): void
+  /** Click the nearest clickable node at or under `instance`; a row keeps its handler on a child. */
+  clickInside(instance: Instance): void
 }
 
 /**
@@ -365,6 +369,13 @@ export function createFakeReact(): FakeReact {
     return found
   }
 
+  function textUnder(instance: Instance): string {
+    if (instance.kind === 'text') return instance.text
+    let text = ''
+    for (const child of instance.children) text += textUnder(child)
+    return text
+  }
+
   function findByClass(handle: number, className: string): Instance | null {
     return (
       findAll(
@@ -385,14 +396,31 @@ export function createFakeReact(): FakeReact {
     flush()
   }
 
+  function firstClickable(instance: Instance): Instance | null {
+    if (instance.kind !== 'text' && isCallable(instance.props.onClick)) return instance
+    for (const child of instance.children) {
+      const found = firstClickable(child)
+      if (found !== null) return found
+    }
+    return null
+  }
+
+  function clickInside(instance: Instance): void {
+    const target = firstClickable(instance)
+    if (target === null) throw new Error('no clickable node at or under this instance')
+    click(target)
+  }
+
   return {
     React: { createElement, Fragment: FRAGMENT, useState, useEffect },
     render,
     unmount,
     flush,
     textOf,
+    textUnder,
     findAll,
     findByClass,
     click,
+    clickInside,
   }
 }

@@ -45,7 +45,20 @@ test/harness/run.sh --all   # 14 个端到端用例（真 DSH 启动 + 真工具
 6. **线格式是冻结契约**：`status: null` 是「还没有工作区信息」的正常状态而非错误；客户端只在操作者
    展开变量时才带 `values=1`；必须校验 `content-type`（SPA fallback 会拿 `index.html` 伪装成 200）。
 7. **client 半边只能是单文件产物**：浏览器侧模块表没有相对 `require`，所以 `client/**/*.ts` 必须经
-   esbuild 打成 `lib/client.js`；产物里 `react` 必须是**唯一一次运行期** `require(` 调用，零 `import`/`export`。
+   esbuild 打成 `lib/client.js`；产物里运行期 `require(` 只允许出现**平台种子**的说明符——当前是
+   `react` 与 `@deepseek-ai/dsh-client-ui-primitives`（完整清单 = 前端 bundle 里的 `staticModules`：
+   `react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、
+   `@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-slots`、
+   `@deepseek-ai/dsh-client-ui-primitives`、`@deepseek-ai/dsh-client-ui-dockkit`），零 `import`/`export`。
+   清单外的说明符会让**整个 web app 白屏**（`client-modules: require("…") missed the module table`），
+   由 `test/client-contract.test.ts` 扫描产物守住。
+   面板一律用官方组件（`Tag`/`StateDot`/`Pill`/`Button`/`DisclosureRow`/`PathLabel`/`Input`/`Tooltip` 等）
+   与它们的 `tone`/`variant` 语义，**不要自写配色、圆角、边框、阴影、字体**——用户会装主题插件，自带一套
+   配色立刻显得不协调；`client/styles.ts` 只允许保留纯布局属性。官方组件的 prop 名与类型由 `h()`
+   （`client/react.ts`）在**编译期**逐个对着 `client/primitives.ts` 的本地结构类型检查：官方 `.d.ts` 进不了
+   浏览器半边（`types: []`），这是唯一一道防线，所以 `h` 的 props 参数必须保持 `NoInfer<P> & { key? }`
+   的写法（去掉 `NoInfer`，编译器会从对象字面量反推 props，拼错的 prop 就**静默通过**了）；假件
+   （`test/helpers/fake-primitives.ts`）另按组件维护允许的 prop 名清单，清单外的 prop 抛错。
 8. **注册形状**：keyed 座位的 `key` 必须是 tab 类型的 **id**（用 `kind` 会静默空白）；composer block
    不许覆盖别的插件的（只写空槽或自己的文案）；`dsh.client.platform` 必须精确等于 `"web"`。
 9. **插件导出形态**：`src/index.ts` 的三个导出保持声明式（`export const name` / `export const Config` /

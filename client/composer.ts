@@ -174,7 +174,8 @@ export interface DockProps {
  * It renders nothing; its whole job is to exist for every mounted composer so
  * the hub can (a) block that session's input while direnv is confirmed to be
  * loading and (b) raise the failure toast through that session's own input
- * shell. A `display: contents` slot anchor makes the empty cell free.
+ * shell. `null` is the whole output — the plugin adds no node and no style to
+ * the dock, so the seat the shell lays out is all there is to see.
  */
 export function DirenvSessionHook(props: DockProps): unknown {
   const hub = props.hub

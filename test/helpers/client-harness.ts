@@ -2,21 +2,27 @@
  * A no-browser harness for the dsh-direnv client half.
  *
  * `client.js` is a browser module: it registers itself through
- * `window.__ModuleLoader__.load({ id, factory })`, its factory answers `require`
- * for `react` only, and everything it renders is `React.createElement`. So a
- * contract test needs exactly three fakes — the module loader, a React that
- * really mounts components and runs effects (see ./fake-react.ts), and the `ctx`
- * services the plugin reads — and the real file supplies everything else.
+ * `window.__ModuleLoader__.load({ id, factory })`, its factory answers the
+ * module table's seed list — `react` and the official UI primitives — and
+ * everything it renders is `React.createElement`. So a contract test needs
+ * exactly four fakes — the module loader, a React that really mounts components
+ * and runs effects (see ./fake-react.ts), honest stubs for the official
+ * primitives (see ./fake-primitives.ts), and the `ctx` services the plugin reads
+ * — and the real file supplies everything else. Any other specifier throws, the
+ * way the platform's table throws, so a typo in one fails here rather than in a
+ * white-screened browser.
  *
  * What it does NOT model: the real SlotCore (registrations are recorded, and
  * `slots.inject` fires immediately), the real SnapshotStore, and a real DOM
- * (`document` stays undefined, so the client's style installer is a no-op).
+ * (`document` stays undefined, which is fine: the client no longer injects a
+ * stylesheet at all).
  */
 
 import { pathToFileURL } from 'node:url'
 
 import { createFakeReact } from './fake-react.ts'
-import type { FakeReact } from './fake-react.ts'
+import type { ElementInstance, FakeReact } from './fake-react.ts'
+import { createPrimitives } from './fake-primitives.ts'
 import { isCallable, isRecord } from './guards.ts'
 import { CLIENT_FILE } from './package-manifest.ts'
 
@@ -224,11 +230,17 @@ export interface Harness {
   errorLines: string[]
   fetchCalls: FetchCall[]
   sessionId: string
+  /** Every text the panel handed to the official clipboard writer, in order. */
+  clipboard: string[]
   urls(): string[]
   lastUrl(): string | null
   respond(next: Responder): void
   settle(turns?: number): Promise<void>
   tick(): void
+  /** The official name of a stubbed primitive component, or `null` for anything else. */
+  primitiveName(type: unknown): string | null
+  /** Instances of one official primitive, in tree order. */
+  primitives(handle: number, name: string): ElementInstance[]
   /** The hub instance the panel registration injects, for direct assertions. */
   hub(): unknown
   /** Mount the sidebar panel body exactly as the keyed seat would. */
@@ -256,6 +268,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const sessionId = options.sessionId ?? 'session-contract'
   const definition = await loadClientDefinition()
   const react = createFakeReact()
+  const stubs = createPrimitives(react.React.createElement)
   const blocks = createBlockRegistry()
   const notifications: Notification[] = []
   const registrations = new Map<string, Registration>()
@@ -368,7 +381,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
   const plugin = definition.factory((name) => {
     if (name === 'react') return react.React
-    throw new Error(`the client module table answers react only, not ${name}`)
+    if (name === '@deepseek-ai/dsh-client-ui-primitives') return stubs.namespace
+    throw new Error(`the client module table answers its seed list only, not ${name}`)
   })
   plugin.apply(ctx)
 
@@ -405,6 +419,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     errorLines,
     fetchCalls,
     sessionId,
+    clipboard: stubs.clipboard,
     urls: () => fetchCalls.map((call) => call.url),
     lastUrl: () => (fetchCalls.length === 0 ? null : fetchCalls[fetchCalls.length - 1]!.url),
     respond(next) {
@@ -412,6 +427,17 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     },
     settle,
     tick,
+    primitiveName: (type) => stubs.nameOf(type),
+    primitives(handle, name) {
+      const found: ElementInstance[] = []
+      for (const instance of react.findAll(
+        handle,
+        (candidate) => candidate.kind === 'component' && stubs.nameOf(candidate.type) === name,
+      )) {
+        if (instance.kind !== 'text') found.push(instance)
+      }
+      return found
+    },
     hub() {
       return panelRegistration.spec.inject(sessionId).hub
     },
