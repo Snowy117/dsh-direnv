@@ -1,0 +1,5 @@
+- id: subprocess
+  disabled: true
+- insert:
+    - id: direnv-subprocess
+      name: 'dsh-direnv'

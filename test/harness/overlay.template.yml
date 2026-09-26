@@ -1,0 +1,38 @@
+# Protocol constraints pinned by DESIGN.md §7.1 (Spike 5) — do not "simplify":
+#   - baseURL MUST include `/v1`: the OpenAI SDK appends `/chat/completions`.
+#   - a patch REPLACES the targeted row's whole `config` (no deep merge), so the
+#     provider stays fully self-contained: api + baseURL + models.
+#   - `apiKeyEnv` MUST name an env var holding a non-empty value, otherwise the
+#     route dies with MISSING_CREDENTIAL before any request is sent.
+# `__PLACEHOLDER__` tokens are substituted by run.ts into .runs/<case>/overlay.yml.
+
+- id: llm-pi-ai
+  config:
+    providers:
+      fake-local:
+        api: openai-completions
+        baseURL: 'http://127.0.0.1:__PORT__/v1'
+        apiKeyEnv: __API_KEY_ENV__
+        displayName: 'Harness Fake LLM (dsh-direnv)'
+        models:
+          - id: fake-model
+            name: 'Fake Model'
+            input: [text]
+            contextWindow: 128000
+            maxTokens: 8192
+
+- id: agent-default-model
+  config:
+    provider: fake-local
+    model: fake-model
+
+- insert:
+    - id: harness-probe
+      name: '__PROBE_PATH__'
+      config:
+        tag: __TAG__
+        mode: __GATE_MODE__
+        gateMs: __GATE_MS__
+        blockAgentCreatedMs: __BLOCK_AGENT_CREATED_MS__
+
+__EXTRA_ROWS__

@@ -1,0 +1,9 @@
+node_modules/
+*.log
+.direnv/
+test/harness/.runs/
+test/.tmp/
+*.tgz
+fake-llm.pid
+fake-llm.port
+lib/
