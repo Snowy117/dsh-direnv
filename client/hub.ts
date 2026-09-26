@@ -16,7 +16,6 @@ import { POLL_MS, STALE_MS, STATUS_PATH } from './constants.ts'
 import type { ClientContext } from './ctx.ts'
 import { report } from './ctx.ts'
 import { ellipsizeMiddle, firstLine, problemDigest } from './format.ts'
-import { readHidden } from './hidden.ts'
 import type { Translate } from './messages.ts'
 import type { ViewRecord } from './status-view.ts'
 import { readStatusBody } from './status-view.ts'
@@ -29,7 +28,6 @@ export interface StatusState {
   readonly attempts: number
   readonly at: number | null
   readonly forcing: boolean
-  readonly hidden: boolean
 }
 
 export interface RequestOutcome {
@@ -46,7 +44,6 @@ export interface StatusHandle {
   subscribe(listener: () => void): () => void
   release(): void
   refresh(force?: boolean | undefined): Promise<RequestOutcome>
-  sync(): boolean
   notify(level: string, text: string): boolean
 }
 
@@ -81,6 +78,12 @@ const PROBLEM_KEYS: Record<string, string> = {
   'direnv-unavailable': 'notify.noDirenv',
 }
 
+/**
+ * A toast is one line of text the plugin cannot wrap, so a pathological path is
+ * clipped here and nowhere else: the panel itself never shortens a path in JS.
+ */
+const TOAST_NAME_LIMIT = 200
+
 export function createStatusHub(ctx: ClientContext, t: Translate): StatusHub {
   const monitors = new Map<string, Monitor>()
   const blocks = createBlockGuard(ctx)
@@ -109,7 +112,7 @@ export function createStatusHub(ctx: ClientContext, t: Translate): StatusHub {
     if (digest === monitor.lastDigest) return
     monitor.lastDigest = digest
     const name = record.envrcPath ?? record.dir
-    callNotify(monitor, 'error', t(key, { name: ellipsizeMiddle(name, 60), detail: detail }))
+    callNotify(monitor, 'error', t(key, { name: ellipsizeMiddle(name, TOAST_NAME_LIMIT), detail: detail }))
   }
 
   function publish(monitor: Monitor, patch: Partial<StatusState>): void {
@@ -124,10 +127,9 @@ export function createStatusHub(ctx: ClientContext, t: Translate): StatusHub {
   }
 
   function syncBlock(monitor: Monitor): void {
-    const hidden = monitor.state.hidden
     const loading = monitor.state.record !== null && monitor.state.record.state === 'loading'
     const fresh = monitor.lastOkAt > 0 && Date.now() - monitor.lastOkAt <= STALE_MS
-    if (loading && fresh && !hidden) blocks.setBlock(monitor.sessionId, t('composer.loading'))
+    if (loading && fresh) blocks.setBlock(monitor.sessionId, t('composer.loading'))
     else blocks.clearBlock(monitor.sessionId)
   }
 
@@ -220,27 +222,10 @@ export function createStatusHub(ctx: ClientContext, t: Translate): StatusHub {
       })
   }
 
-  /**
-   * Re-read the local hide preference without touching the network: hiding
-   * releases the composer immediately, showing polls immediately.
-   */
-  function syncHidden(monitor: Monitor): boolean {
-    const hidden = readHidden(monitor.sessionId)
-    if (hidden === monitor.state.hidden) return hidden
-    publish(monitor, { hidden: hidden })
-    if (hidden) blocks.clearBlock(monitor.sessionId)
-    else void request(monitor, false)
-    return hidden
-  }
-
   function tick(monitor: Monitor): void {
     if (disposed) return
-    if (readHidden(monitor.sessionId)) {
-      if (monitor.state.hidden !== true) publish(monitor, { hidden: true })
-      blocks.clearBlock(monitor.sessionId)
-      return
-    }
-    if (monitor.state.hidden === true) publish(monitor, { hidden: false })
+    // Page visibility only: a backgrounded tab stops polling, but the last answer
+    // stays on screen and the poll resumes the moment the tab is shown again.
     try {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
     } catch {
@@ -252,9 +237,7 @@ export function createStatusHub(ctx: ClientContext, t: Translate): StatusHub {
   function start(monitor: Monitor): void {
     if (monitor.started) return
     monitor.started = true
-    const hidden = readHidden(monitor.sessionId)
-    publish(monitor, { hidden: hidden })
-    if (!hidden) tick(monitor)
+    tick(monitor)
     monitor.timer = setInterval(() => tick(monitor), POLL_MS)
   }
 
@@ -298,7 +281,6 @@ export function createStatusHub(ctx: ClientContext, t: Translate): StatusHub {
         attempts: 0,
         at: null,
         forcing: false,
-        hidden: false,
       }),
     }
     monitors.set(key, monitor)
@@ -332,7 +314,6 @@ export function createStatusHub(ctx: ClientContext, t: Translate): StatusHub {
         },
         release: () => release(monitor),
         refresh: (force?: boolean | undefined) => request(monitor, force === true),
-        sync: () => syncHidden(monitor),
         notify: (level: string, text: string) => callNotify(monitor, level, text),
       }
     },
@@ -346,7 +327,7 @@ export function createStatusHub(ctx: ClientContext, t: Translate): StatusHub {
       const next = wanted === true
       if (next === monitor.valuesWanted) return
       monitor.valuesWanted = next
-      if (next && monitor.state.hidden !== true) void request(monitor, false)
+      if (next) void request(monitor, false)
     },
     dispose(): void {
       disposed = true

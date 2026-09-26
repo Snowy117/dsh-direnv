@@ -1,14 +1,18 @@
 /**
- * Environment details: masked values, per-row reveal, name search, and name
- * copying. Row state is component-local, so a poll never collapses a row the
- * reader opened. Values arrive only while at least one row is open — the panel
- * asks the host for them on reveal and stops asking on collapse.
+ * Environment details: masked values, per-row reveal, name search, name copying,
+ * and the `PATH` diff.
+ *
+ * Row state is component-local, so a poll never collapses a row the reader
+ * opened. Values arrive only while at least one row is open — the panel asks the
+ * host for them on reveal and stops asking on collapse. A `PATH` row is never
+ * shortened here: it wraps, and its `title` carries the whole component.
  */
 
 import { isThenable } from './ctx.ts'
-import { MASK, ellipsizeMiddle } from './format.ts'
+import { MASK } from './format.ts'
 import { h, useEffect, useState } from './react.ts'
 import { S } from './styles.ts'
+import type { PathChange, PathEntry } from '../src/types.ts'
 import type { ViewRecord, ViewVariable } from './status-view.ts'
 import type { Translate } from './messages.ts'
 
@@ -155,25 +159,54 @@ export function EnvDetails(props: EnvDetailsProps): unknown {
   )
 }
 
-export interface PathAdditionsProps {
+export interface PathEntriesProps {
   t: Translate
-  items: readonly string[]
+  entries: readonly PathEntry[]
+  unset: boolean
 }
 
-export function PathAdditions(props: PathAdditionsProps): unknown {
+/** Every change has a style, so a new `PathChange` cannot silently render uncoloured. */
+const PATH_STYLES: Record<PathChange, Record<string, unknown>> = {
+  added: S.pathAdded,
+  removed: S.pathRemoved,
+  unchanged: S.pathUnchanged,
+}
+
+/** An unset `PATH` and an untouched one both diff to nothing; only the variable list tells them apart. */
+export function pathWasRemoved(variables: readonly ViewVariable[], entries: readonly PathEntry[]): boolean {
+  if (entries.length > 0) return false
+  return variables.some((variable) => variable.name === 'PATH' && variable.hasValue === false)
+}
+
+export function PathEntries(props: PathEntriesProps): unknown {
   const t = props.t
-  const items = props.items
-  return h(
-    'div',
-    { style: S.card },
-    h('div', { style: S.sectionTitle }, t('label.pathAdditions')),
-    items.length === 0
-      ? h('div', { style: S.muted }, t('hint.empty'))
+  const entries = props.entries
+  const body =
+    entries.length === 0
+      ? h('div', { style: S.muted }, props.unset ? t('hint.pathUnset') : t('hint.empty'))
       : h(
           'div',
           { style: S.list },
-          items.map((item) => h('div', { key: item, style: { ...S.mono, ...S.value }, title: item }, ellipsizeMiddle(item, 44))),
-        ),
+          entries.map((entry, index) =>
+            h(
+              'div',
+              {
+                // The same component may repeat in a PATH, so position is part of the key.
+                key: `${String(index)}\u0000${entry.value}`,
+                className: `dsh-direnv-path dsh-direnv-path-${entry.change}`,
+                style: { ...S.mono, ...S.value, ...PATH_STYLES[entry.change] },
+                title: entry.value,
+              },
+              entry.value === '' ? t('hint.pathEmpty') : entry.value,
+            ),
+          ),
+        )
+  return h(
+    'div',
+    { style: S.card },
+    h('div', { style: S.sectionTitle }, t('label.path')),
+    props.unset ? null : h('div', { style: S.muted }, t('hint.pathOrder')),
+    body,
   )
 }
 

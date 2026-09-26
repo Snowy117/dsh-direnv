@@ -161,6 +161,22 @@ export const S = {
     fontSize: '11.5px',
     color: 'var(--dsw-alias-label-primary)',
   },
+  /**
+   * Single-line fields only. `minWidth: 0` is what lets a flex child shrink
+   * below its content width, which is the precondition for the ellipsis; a list
+   * row must never take this style, because a wrapped path has to stay whole.
+   */
+  truncate: {
+    minWidth: 0,
+    maxWidth: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  /** The three `PATH` states. Added/removed reuse the theme's state tokens. */
+  pathAdded: { color: 'var(--dsw-alias-state-success-primary)' },
+  pathRemoved: { color: 'var(--dsw-alias-state-error-primary)', textDecoration: 'line-through' },
+  pathUnchanged: { color: 'var(--dsw-alias-label-primary)' },
   pre: {
     margin: 0,
     maxHeight: '140px',

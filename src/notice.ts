@@ -9,9 +9,9 @@
  * per state change, and nothing at all when a directory has no `.envrc`.
  */
 
-import type { StatusRecord } from './types.ts'
+import type { PathEntry, StatusRecord } from './types.ts'
 
-const MAX_PATH_SAMPLE = 6
+const MAX_NAME_SAMPLE = 6
 
 export interface NoticeMessage {
   text: string
@@ -39,10 +39,27 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`): s
   return `${String(count)} ${count === 1 ? singular : pluralForm}`
 }
 
-function summarizePaths(paths: readonly string[]): string {
-  const sample = paths.slice(0, MAX_PATH_SAMPLE)
-  const rest = paths.length - sample.length
+function summarizeNames(names: readonly string[]): string {
+  const sample = names.slice(0, MAX_NAME_SAMPLE)
+  const rest = names.length - sample.length
   return rest > 0 ? `${sample.join(', ')} (+${String(rest)} more)` : sample.join(', ')
+}
+
+/**
+ * Both counts stay in the message and neither path component does: `PATH`
+ * entries are machine-specific absolute paths, and the model only needs to know
+ * that the workspace's search path differs from the harness default.
+ */
+function pathCounts(entries: readonly PathEntry[]): string {
+  let added = 0
+  let removed = 0
+  for (const entry of entries) {
+    if (entry.change === 'added') added += 1
+    else if (entry.change === 'removed') removed += 1
+  }
+  if (removed === 0) return added === 0 ? '' : `${plural(added, 'PATH entry', 'PATH entries')} added`
+  const removedText = `${String(removed)} removed`
+  return added === 0 ? `${plural(removed, 'PATH entry', 'PATH entries')} removed` : `${plural(added, 'PATH entry', 'PATH entries')} added, ${removedText}`
 }
 
 function baselineText(status: StatusRecord): string {
@@ -50,7 +67,8 @@ function baselineText(status: StatusRecord): string {
   switch (status.state) {
     case 'ok': {
       const parts = [plural(status.variables.length, 'variable')]
-      if (status.pathAdditions.length > 0) parts.push(`${plural(status.pathAdditions.length, 'PATH entry', 'PATH entries')} added`)
+      const paths = pathCounts(status.pathEntries)
+      if (paths !== '') parts.push(paths)
       if (status.credentials.length > 0) parts.push(`${String(status.credentials.length)} credential-like, values available to commands`)
       parts.push(`${String(status.ms ?? 0)} ms`)
       return `direnv loaded ${where} for this workspace: ${parts.join(', ')}. Every command you run here inherits it.`
@@ -84,11 +102,12 @@ function changedText(previous: NoticeState, status: StatusRecord): string | null
   const removed = [...before].filter((name) => !after.has(name))
   if (added.length === 0 && removed.length === 0 && previous.ms === status.ms) return null
   const changes: string[] = []
-  if (added.length > 0) changes.push(`added ${summarizePaths(added)}`)
-  if (removed.length > 0) changes.push(`removed ${summarizePaths(removed)}`)
+  if (added.length > 0) changes.push(`added ${summarizeNames(added)}`)
+  if (removed.length > 0) changes.push(`removed ${summarizeNames(removed)}`)
   const detail = changes.length === 0 ? 're-evaluated' : changes.join(', ')
-  const paths = status.pathAdditions.length > 0 ? ` PATH now includes ${summarizePaths(status.pathAdditions)}.` : ''
-  return `direnv re-evaluated ${status.envrcPath ?? status.dir}: ${detail}.${paths}`
+  const paths = pathCounts(status.pathEntries)
+  const pathLine = paths === '' ? '' : ` PATH: ${paths}.`
+  return `direnv re-evaluated ${status.envrcPath ?? status.dir}: ${detail}.${pathLine}`
 }
 
 export function createNoticeTracker(): NoticeTracker {

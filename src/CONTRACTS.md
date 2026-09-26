@@ -98,6 +98,16 @@ type Outcome =
   | { kind: 'direnv-unavailable'; dir: string; code: string; ms: number; at: number }
   | { kind: 'disabled';           dir: string; at: number }
 
+/**
+ * PATH 的一条差分项。`value` 是原始分量（空串也是合法分量——POSIX 里它表示
+ * 当前目录），渲染成什么样由 client 决定。`change` 是**三态**，缺一不可：
+ * `unchanged` 不能拿来当「字段读不出来」时的默认值，那样等于谎报「没有变化」。
+ */
+interface PathEntry {
+  value: string
+  change: 'added' | 'removed' | 'unchanged'
+}
+
 interface StatusRecord {
   dir: string
   state: Outcome['kind'] | 'idle' | 'loading'
@@ -106,7 +116,7 @@ interface StatusRecord {
   envrcPath: string | null
   memoHit: boolean
   variables: { name: string; sensitive: boolean; hasValue: boolean }[]  // 名字 + 是否凭据类
-  pathAdditions: string[]      // direnv 相对 base 新加的 PATH 项
+  pathEntries: PathEntry[]     // direnv 相对 base 的 PATH 差分，见下「顺序与多重集」
   credentials: string[]        // 命中 /KEY|PASSWORD|SECRET|TOKEN/i 的变量名
   errorSummary: string | null
   warnings: string[]
@@ -116,6 +126,20 @@ interface StatusRecord {
 ```
 
 **两个预算不要混。** `evaluateTimeoutMs` 是**求值子进程**的 kill 期限（默认 `0` = 不设上限，代价是一个死循环的 `.envrc` 会一直挂着）；门闸的等待预算由 `src/gate.ts` 的 `timeoutMs`（配置里的 `loadTimeoutMs`，默认 300000）单独决定。两者曾经共用同一个数字，后果是慢 `.envrc`（冷 `use flake`）一超时就**既放行了工具、又杀掉了求值**，于是环境永远拿不到、而且非 ok 记录让后续 spawn 连重试都不做——这正是 `DESIGN.md` §7.2 记录的那个真 bug。
+
+**`pathEntries` 的顺序与多重集语义（`src/evaluator/derive.ts` 是唯一实现）：**
+
+- **顺序 = 新 PATH 的顺序**（靠前 = 优先级更高）。游标推进到某个 new 分量、并要占用 base 里
+  更靠后的一个出现时，先把跳过的、不与任何 new 分量配对的 base 分量作为 `removed` 发出。
+  因此只有在新 PATH 保持 base 原有顺序时，删除才恰好落在它原来的两个邻居之间；new 被整体
+  重排时，删除只会出现在「游标走到下一个 new 分量之前」，未必挨着原邻居。走完 new 之后
+  剩下的 `removed` 追加在末尾（PATH 变短时看得最清楚）。
+- **多重集配对，不是集合**：同一个目录可以合法地在 `PATH` 里出现多次，每次出现都是独立的
+  优先级槽位。第 k 次出现只有在 base 里也有第 k 次出现时才算 `unchanged`；超出 new 计数的
+  那些 base 出现就是 `removed`，反之 new 里多出来的就是 `added`。用 `Set` 判成员会漏判重复项。
+- base 里**没有 `PATH`** 时全部算 `added`（不是错误）；分量可以是**空串**（POSIX 里表示当前
+  目录），差分不得抛错，渲染由 client 决定。
+- 模型侧（`src/notice.ts`）**只报数量**（`N PATH entries added, M removed`），绝不报具体路径。
 
 求值器必须实现 DESIGN.md §3.2 的分类规则，其中几条不可简化：
 
@@ -244,6 +268,10 @@ export function parseEnvelope(body: unknown): StatusEnvelope | null
   `undefined`），不是 `null`，读侧必须按可选处理。
 - 只有 `?values=1` 才让 host 往 `status.env` 里放变量**值**；不传时恒为 `null`。墓碑
   （`EnvOverlay` 里的 `undefined`）根本到不了线上，序列化时就被丢掉了。
+- `status.pathEntries` 原样过线（顺序有意义，见上）。读侧对它的降级是**丢掉**而不是猜：
+  `pathEntries` 不是数组 → `[]`；条目不是对象、`value` 不是字符串、或 `change` 不是
+  `added`/`removed`/`unchanged` 之一 → 丢掉该条。**绝不把读不出的 `change` 默认成
+  `unchanged`**——那等于对读者谎报「这里没有变化」。空串 `value` 要保留。
 
 ## `src/status-route.ts` — 面板数据源
 

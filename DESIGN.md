@@ -40,7 +40,7 @@
 | D6 | **放行策略** | 只要「有确定结果」就放行（成功/无 `.envrc`/被 block/报错/超时）；门闸预算 `loadTimeoutMs` 默认 300000，超时后**求值不中断**、后台继续跑并写缓存；求值子进程的 kill 期限是**独立**的 `evaluateTimeoutMs`（默认 0 = 不杀） | 一个坏 `.envrc` 不该让会话瘫痪。门闸的语义是「等工作做完」，不是「等成功」。两个预算必须分开：拿门闸超时当杀求值的理由，会让慢 `.envrc` 永远拿不到环境（§7.2 核查发现） |
 | D7 | **求值与取用** | 预热点异步求值 + `spawn()` **纯查表**（冷则原样放行 + 触发异步补齐）；base env = `scrubbedParentEnv()` **再剔除全部 `DIRENV_*`**；**分级 memo**：只对昂贵的 nix/flake 结果缓存，键 = watches 逐项重扫 + **配置类输入**（`direnv.toml`、`lib/*.sh`、direnv 二进制、PATH 指纹），失败与 blocked 一律不缓存 | 剔除 `DIRENV_*` 是**安全红线**（否则复活被清洗的密钥）。direnv **没有**跨进程缓存（实测 5 次调用 = 5 次真执行）。核查证明**只按 `DIRENV_WATCHES` 缓存是错的**：`lib/*.sh`、`direnv.toml` 都不在 watches 里，那样会比「每次干净求值」更不正确 |
 | D8 | **凭据类变量** | 全量注入（忠实 direnv），但**一次性把凭据名单告诉用户**（只进 sidebar，不进模型上下文）；`injectSensitive` 开关 | `.envrc` 已过 `direnv allow`，功能上就该等价于用户自己的 shell；但「悄悄扩大暴露面」不可接受 |
-| D9 | **GUI 面** | 官方右列 tab（P2 内容）+ composer 占位符 + 失败 Toast + 「重新加载」「本工作区禁用」 | 见 §3.5 |
+| D9 | **GUI 面** | 官方右列 tab（P2 内容）+ composer 占位符 + 失败 Toast + 「重新加载」。原计划的「本工作区禁用」按钮**已删除**：状态路由 GET-only、没有写接口，浏览器侧的「隐藏面板」既不真禁用又误导（见 §3.5） | 见 §3.5 |
 | D10 | **交付** | npm 包 `dsh-direnv`（无 scope，未被占用）、`README.md` + `README.zh.md`、MIT、`dsh-plugin` 关键词 | 生态惯例（`dsh-status-rotator` / `dsh-context` / `dsh-better-sidebar` 均无 scope） |
 | D11 | **安装方式** | 只做 subprocess 接管，**不**提供保守的 `./shell` 入口 | 双入口 = 两条维护路径；真有问题时再带着数据决定 |
 | D12 | **两个语义细节** | ① `.envrc` 里的 `unset` 精确支持（`null` → `undefined` 墓碑）；② 调用方/宿主显式 env 优先于 direnv | 实测 `direnv export json` 对 unset 输出 `null`；`SubprocessSpawnSpec.env` 的 JSDoc 明确 `undefined` 是墓碑、字符串是「deliberate caller opt-in」 |
@@ -235,8 +235,8 @@ ctx.slots.inject('sidebar.right.pane.tab', () =>
 
 面板内容（P2）：
 
-1. **状态卡**：`.envrc` 路径、状态（加载中 / 已就绪 / 被 block / 出错 / 无 `.envrc`）、耗时、错误摘要；两个按钮——**重新加载**、**本工作区禁用 direnv**。
-2. **环境明细**：本工作区由 direnv 提供的变量清单（值默认遮蔽、可逐个展开、可搜索）、`PATH` 新增了哪些项。
+1. **状态卡**：`.envrc` 路径、状态（加载中 / 已就绪 / 被 block / 出错 / 无 `.envrc`）、耗时、错误摘要；一个按钮——**重新加载**。（曾计划的「本工作区禁用」按钮已删除，理由见本节末。）
+2. **环境明细**：本工作区由 direnv 提供的变量清单（值默认遮蔽、可逐个展开、可搜索）、`PATH` 的**有序三态差分**（绿 = 新增、红删除线 = 被移除、默认色 = 不变；靠前 = 优先级更高，列表逐行整条显示、不做 JS 截断）。
 3. **凭据名单**（D8）：命中 `/KEY|PASSWORD|SECRET|TOKEN/i` 的变量名单，明确标注「这些会出现在子进程环境中」。**只给用户看。**
 
 **不要依赖 `dsh-better-sidebar`**：DSH 0.1.7 自带这套官方右列 API，而 better-sidebar 自己（v0.19 起）就是走这套 API 的——我们的 tab 会与它的文件树/编辑器 tab 并列显示。`ctx.betterSidebar` 那个服务只管它的底部工作台，与本插件无关。
@@ -251,7 +251,7 @@ ctx.slots.inject('sidebar.right.pane.tab', () =>
 
 > ⚠️ **这条路由必须自己上闸（核查实测的发现）**：DSH 的鉴权/信任围栏是**逐路由自愿调用**的，只加在首页与 `/api` 上；官方自带的 `/plugins/*` 分发路由**既不校验 token cookie、也不做 Host/Origin 检查、也不返回 CORS 头**（实测：无 cookie 也能 200；带外站 Host/Origin 也 200）。我们的面板要展示变量名甚至变量值，所以**必须显式复用同一套围栏**（`connection.admit` 那条路），并坚持最小暴露：默认只返回状态与变量**名**，值必须逐个按需取。
 
-**「本工作区禁用」的持久化**：走 `ctx.storage`（可选 `inject`，缺失则该按钮隐藏），键为 canonical workspace path。
+**「本工作区禁用」为什么没有实现（D9 修正）**：v1 的状态路由是 **GET-only**，没有写接口，所以「本工作区禁用 direnv」无法真正落地——任何客户端按钮都只能改自己浏览器里的一个偏好，改不了任何命令的环境。那种退化成「把面板藏起来」的做法会误导操作者（以为禁用了、其实命令照旧带环境），因此**整个删除**：`client/hidden.ts`、monitor 的 `hidden` 状态与「面板隐藏时跳过轮询/放行 composer」的分支、底部按钮与 `action.disable` / `action.enable` / `hint.hidden` / `hint.paused` 文案键，一并不再存在。保留的是**页面可见性**那条判断（`document.visibilityState === 'hidden'`：后台标签页暂停轮询），它与「隐藏面板」无关。真正的按工作区禁用需要 host 写接口，见 §9；在那之前，host 侧配置的 `disabledDirs` 是唯一语义为真的「禁用」（根本不注入）。
 
 ### 3.6 状态机
 
@@ -670,6 +670,8 @@ dsh --profile installed --patch <llm-only overlay> --json "…"          # 真�
 | memo 内容指纹多读文件（68 KB 级 `.rc` 每次预热点 +1 ms 量级） | 只对「配置文件 + `.direnv` 缓存 watch」内容寻址，普通 watch 项仍是 `mtime+size`；预热点只在未知目录 spawn 与工具门前发生 |
 | 凭据暴露面扩大 | D8：名单给用户看 + `injectSensitive` 开关；README 显著位置说明 |
 | 模型把 `HOST`/`PORT` 之类的 dev 变量误当成生产值 | 一次性提示里写明「这些来自本工作区的 `.envrc`」 |
+| **`diffPathEntries` 在 PATH 完全不相交且极长时是 O(n²)**：每个 new 分量都要从游标处线性扫描 base 找配对 | 两次独立测量：2000 条 47–52 ms、5000 条 192–217 ms、10000 条 300–506 ms、20000 条 1594–1793 ms。真实 PATH 是几十到几百条，只有病态 `.envrc` 才造得出几万条，`PATH` 还受 direnv 输出上限约束。**未优化**：真实量级无影响，而重写配对逻辑会多出一类「删除条目不丢不重」的出错面 |
+| **纯重排的 PATH 不给模型任何 PATH 提示**：`.envrc` 只是把已有条目换顺序时，差分全是 `unchanged`，`src/notice.ts` 的 `pathCounts` 报 0 增 0 删，模型侧不会收到任何 PATH 相关文案 | 这是有意的：模型拿到的环境本身是对的，重排不需要它做任何事（`ms` 变了仍会有一条不带 PATH 计数的「re-evaluated」）。旧实现同样如此，属**非回归**；记在这里，避免以后被当成 bug 反复调查 |
 | `writeFileAtomic` 毁软链 | 文档三令五申，安装路径只给 nix 模块与 bundle 两条 |
 
 ---
@@ -681,6 +683,7 @@ dsh --profile installed --patch <llm-only overlay> --json "…"          # 真�
 3. **给上游提 issue**：把「任意 env 贡献者」做成正式缝隙（`ctx.shellEnv` 现在只收 `DSH_*`）。`mise` / `asdf` / dotenv 用户是同一类需求，本插件可以当参考实现。
 4. Windows / pwsh 实测。
 5. 导出「本工作区环境快照」，便于排查「为什么这条命令在终端里能跑、在模型手里不行」。
+6. **真·按工作区禁用 + host 写接口**：D9 原本的「本工作区禁用」需要一条带写语义的 host 路由（例如 `POST /plugins/dsh-direnv/workspaces.json`，同样必须自己上闸），把「这个目录不注入环境」记在 host 侧而不是浏览器里；配套的 client 按钮才不再骗人。要一并想清楚写接口的鉴权/CSRF、记录存在哪、以及它与 `disabledDirs` 的关系（缓存失效粒度）。
 
 ---
 

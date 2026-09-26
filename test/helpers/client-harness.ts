@@ -195,24 +195,15 @@ export interface Registration {
   Component: unknown
 }
 
-interface LocalStorageLike {
-  readonly store: Map<string, string>
-  getItem(key: string): string | null
-  setItem(key: string, value: string): void
-  removeItem(key: string): void
-}
-
 /**
- * The globals this harness installs. No DOM lib is loaded in the test project and
- * `localStorage` is not a Node declaration either, so the harness owns the shape
- * of every global it replaces rather than borrowing a type the client bundle was
- * never compiled against.
+ * The globals this harness installs. No DOM lib is loaded in the test project,
+ * so the harness owns the shape of every global it replaces rather than
+ * borrowing a type the client bundle was never compiled against.
  */
 interface ObservedGlobals {
   fetch: (url: unknown, init?: unknown) => Promise<FakeResponse>
   setInterval: (fn: () => void) => number
   clearInterval: (id: number) => void
-  localStorage: LocalStorageLike
 }
 
 const observed = globalThis as unknown as ObservedGlobals
@@ -351,8 +342,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     hadFetch: Object.prototype.hasOwnProperty.call(globalThis, 'fetch'),
     setInterval: globalThis.setInterval,
     clearInterval: globalThis.clearInterval,
-    hadLocalStorage: Object.prototype.hasOwnProperty.call(globalThis, 'localStorage'),
-    localStorage: Reflect.get(globalThis, 'localStorage') as unknown,
     consoleDebug: console.debug,
     consoleError: console.error,
   }
@@ -369,18 +358,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   }
   observed.clearInterval = (id) => {
     intervals.delete(id)
-  }
-  observed.localStorage = {
-    store: new Map<string, string>(),
-    getItem(key) {
-      return this.store.has(key) ? (this.store.get(key) ?? null) : null
-    },
-    setItem(key, value) {
-      this.store.set(key, String(value))
-    },
-    removeItem(key) {
-      this.store.delete(key)
-    },
   }
   console.debug = (...args: unknown[]) => {
     debugLines.push(args.map(String).join(' '))
@@ -461,8 +438,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       else Reflect.deleteProperty(globalThis, 'fetch')
       globalThis.setInterval = saved.setInterval
       globalThis.clearInterval = saved.clearInterval
-      if (saved.hadLocalStorage) Reflect.set(globalThis, 'localStorage', saved.localStorage)
-      else Reflect.deleteProperty(globalThis, 'localStorage')
       console.debug = saved.consoleDebug
       console.error = saved.consoleError
     },

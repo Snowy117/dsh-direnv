@@ -334,9 +334,9 @@ test('disabled: isDirDisabled skips direnv entirely', async () => {
   assert.equal(spawned, 1)
 })
 
-// Path additions are reported relative to the base PATH (they are what the
-// sidebar shows as "direnv changed PATH").
-test('status: path additions relative to base PATH', async () => {
+// The sidebar shows "direnv changed PATH" as an ordered diff against the base
+// PATH, so the added entry leads and the base's own order is the tail.
+test('status: PATH diff relative to the base PATH, in the new order', async () => {
   const dir = fixture('path-add', { '.envrc': 'export PATH="$PWD/bin:$PATH"\n' })
   fs.mkdirSync(path.join(dir, 'bin'))
   allow(dir)
@@ -346,7 +346,17 @@ test('status: path additions relative to base PATH', async () => {
   assert.equal(outcome.kind, 'ok')
   assert.equal(outcome.overlay.PATH, `${path.join(dir, 'bin')}:${process.env.PATH}`)
   const status = evaluator.status(dir)
-  assert.deepEqual(status.pathAdditions, [path.join(dir, 'bin')])
+  const base = String(process.env.PATH ?? '').split(':')
+  assert.deepEqual(
+    status.pathEntries.map((entry) => entry.value),
+    [path.join(dir, 'bin'), ...base],
+    'the added entry comes first and every base entry follows in its own order',
+  )
+  assert.deepEqual(
+    status.pathEntries.map((entry) => entry.change),
+    ['added', ...base.map(() => 'unchanged')],
+    'nothing was removed, so the only diff is the prepended entry',
+  )
   assert.equal(status.variables.find((entry) => entry.name === 'PATH')!.sensitive, false)
 })
 

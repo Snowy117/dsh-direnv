@@ -14,7 +14,12 @@ export function firstLine(text: string, limit: number): string {
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line
 }
 
-/** `head…tail`, so a long path keeps both its root and its leaf visible. */
+/**
+ * `head…tail`, so a long path keeps both its root and its leaf visible.
+ *
+ * Only a pathological-length guard: a single-line field truncates through CSS
+ * and a list row wraps, so nothing a reader might copy is shortened here.
+ */
 export function ellipsizeMiddle(text: string, limit: number): string {
   if (text.length <= limit) return text
   const keep = Math.max(1, limit - 1)

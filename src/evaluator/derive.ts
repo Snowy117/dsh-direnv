@@ -7,12 +7,16 @@
  *   looks sensitive, and whether it has a value; masking the value is the
  *   client's decision. `credentials` are names too — the status route only ever
  *   ships them when the operator explicitly asked for values.
- * - **`pathAdditions` are relative to the base `PATH`**, i.e. what direnv added,
- *   because that is what "direnv changed PATH" means to whoever reads the panel;
- *   the absolute list is already visible in the overlay.
+ * - **`pathEntries` are a diff against the base `PATH`**, not the absolute list
+ *   (which is already visible in the overlay). The order is the *new* `PATH`'s
+ *   order, because "earlier means higher priority" is the only way a reader can
+ *   interpret the list; a base-only component is emitted before the next new
+ *   component the walk pairs up, so a removal reads in place only while the new
+ *   `PATH` keeps the base order — a reordering can surface it next to components
+ *   that were never its neighbours.
  */
 
-import type { DerivedFacts, Overlay, StatusVariable } from '../types.ts'
+import type { DerivedFacts, Overlay, PathEntry, StatusVariable } from '../types.ts'
 
 /** Same credential heuristic the harness uses (substring, case-insensitive). */
 const SENSITIVE_NAME = /KEY|PASSWORD|SECRET|TOKEN/i
@@ -27,19 +31,69 @@ export function deriveFacts(overlay: Overlay, basePath: string | undefined): Der
   }
   variables.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   credentials.sort()
-  return { variables, credentials, pathAdditions: pathAdditions(overlay, basePath) }
+  return { variables, credentials, pathEntries: diffPathEntries(overlay.PATH, basePath) }
 }
 
-function pathAdditions(overlay: Overlay, basePath: string | undefined): string[] {
-  const value = overlay.PATH
+/**
+ * The ordered, multiset-aware `PATH` diff.
+ *
+ * A `PATH` is a *list*, not a set: the same directory may legitimately appear
+ * twice, and each occurrence is its own priority slot. So occurrences pair up by
+ * count — the k-th occurrence of a component in the new `PATH` is `unchanged`
+ * only while the base has a k-th occurrence to pair it with, and the k-th
+ * occurrence beyond the new count is what got `removed`.
+ *
+ * Interleaving: walk the new list, pairing each new component with an unmatched
+ * base occurrence at or after the cursor; a pairing that skips over unmatched
+ * base components emits them first. A removal therefore lands next to its old
+ * neighbours only while the new `PATH` keeps the base order — after a reordering
+ * it surfaces before whichever new component the walk reaches next. Whatever
+ * base entries remain are appended at the end, which is where a `PATH`
+ * shortening shows up.
+ */
+function diffPathEntries(value: unknown, basePath: string | undefined): PathEntry[] {
   if (typeof value !== 'string') return []
-  const known = new Set(String(basePath ?? '').split(':').filter(Boolean))
-  const added: string[] = []
-  const seen = new Set<string>()
-  for (const entry of value.split(':').filter(Boolean)) {
-    if (known.has(entry) || seen.has(entry)) continue
-    seen.add(entry)
-    added.push(entry)
+  const next = value.split(':')
+  const base = typeof basePath === 'string' ? basePath.split(':') : []
+  const newCounts = counts(next)
+  const baseCounts = counts(base)
+
+  const seenInNew = new Map<string, number>()
+  const planned: PathEntry[] = next.map((item) => {
+    const seen = (seenInNew.get(item) ?? 0) + 1
+    seenInNew.set(item, seen)
+    return { value: item, change: seen <= (baseCounts.get(item) ?? 0) ? 'unchanged' : 'added' }
+  })
+
+  const seenInBase = new Map<string, number>()
+  const removedInBase = base.map((item) => {
+    const seen = (seenInBase.get(item) ?? 0) + 1
+    seenInBase.set(item, seen)
+    return seen > (newCounts.get(item) ?? 0)
+  })
+
+  const entries: PathEntry[] = []
+  let cursor = 0
+  for (const step of planned) {
+    const match = base.findIndex((candidate, at) => at >= cursor && candidate === step.value && !removedInBase[at])
+    if (match !== -1) {
+      for (let at = cursor; at < match; at += 1) {
+        const candidate = base[at]
+        if (candidate !== undefined && removedInBase[at] === true) entries.push({ value: candidate, change: 'removed' })
+      }
+      cursor = match + 1
+    }
+    entries.push(step)
   }
-  return added
+  for (let at = cursor; at < base.length; at += 1) {
+    const candidate = base[at]
+    if (candidate !== undefined && removedInBase[at] === true) entries.push({ value: candidate, change: 'removed' })
+  }
+  return entries
+}
+
+function counts(items: readonly string[]): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const item of items) out.set(item, (out.get(item) ?? 0) + 1)
+  return out
 }

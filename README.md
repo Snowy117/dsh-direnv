@@ -25,7 +25,7 @@ source, and they never block each other:
 |---|---|
 | **Injection** | `spawn` looks the directory up in a cache and merges the diff into the child's environment. The lookup is synchronous and never waits: an unknown directory is forwarded untouched while its evaluation runs in the background, and `spawnTerminal` (a PTY the user opened) awaits the evaluation first. |
 | **Gate** | While the session's environment is still unknown, tool calls are held — the model may talk and may *ask* for tools, but those calls wait as though the tool itself were slow. The gate arms once per session, waits at most `loadTimeoutMs`, and is a delay rather than a filter: a determinate result, the timeout, and a cancellation all release it. A released call does **not** cancel the evaluation: that keeps running under its own budget (`evaluateTimeoutMs`, `0` = never kill), so a slow `.envrc` finishes in the background and the next command in that workspace gets the environment. |
-| **Surfaces** | One sourced notice tells the model what was loaded; a right-sidebar tab tells you, with variable names, `PATH` additions, and a credential list. |
+| **Surfaces** | One sourced notice tells the model what was loaded; a right-sidebar tab tells you the variable names, the `PATH` diff (added, removed or unchanged, in priority order) and the credential list. |
 
 Direnv does the walking: the anchor is each spawn's **own resolved `cwd`**, so a
 command that `cd`s into a subdirectory gets that subdirectory's environment, and

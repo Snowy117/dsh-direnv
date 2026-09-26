@@ -17,11 +17,5 @@ export const POLL_MS = 1800
 /** Three missed polls: past this, the last good answer is no longer trusted. */
 export const STALE_MS = POLL_MS * 3
 
-/**
- * Keys are per browser tab and per session, so "hide direnv here" is a view
- * preference rather than a workspace policy.
- */
-export const DISABLED_PREFIX = 'dsh-direnv:disabled:'
-
 /** The frozen credential-matching rule (CONTRACTS.md, DESIGN.md D8). */
 export const SENSITIVE = /KEY|PASSWORD|SECRET|TOKEN/i

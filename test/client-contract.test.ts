@@ -34,6 +34,24 @@ const VARIABLES = [
 ]
 const VALUES = { API_TOKEN: 'tok-live-123', EDITOR: 'vim', PATH: '/work/ws-contract/bin:/usr/bin' }
 
+/** One `PATH` diff entry exactly as the host serializes it. */
+interface EnvelopePathEntry {
+  value: string
+  change: string
+}
+
+/**
+ * A realistic ordered diff: the base was
+ * `/usr/bin:/opt/legacy/bin:/work/ws-contract/bin`, the new PATH prepends the
+ * nix profile and drops `/opt/legacy/bin`.
+ */
+const PATH_ENTRIES: EnvelopePathEntry[] = [
+  { value: '/nix/store/abcd1234-nix-direnv/bin', change: 'added' },
+  { value: '/opt/legacy/bin', change: 'removed' },
+  { value: '/work/ws-contract/bin', change: 'unchanged' },
+  { value: '/usr/bin', change: 'unchanged' },
+]
+
 interface EnvelopeStatus {
   dir: string
   state: string
@@ -43,7 +61,7 @@ interface EnvelopeStatus {
   memoHit: boolean
   watchCount: number
   variables: { name: string; sensitive: boolean; hasValue: boolean }[]
-  pathAdditions: string[]
+  pathEntries: EnvelopePathEntry[]
   credentials: string[]
   errorSummary: string | null
   warnings: string[]
@@ -86,7 +104,7 @@ function envelope({ state = 'ok', env = null, overrides = {} }: EnvelopeOptions 
       memoHit: true,
       watchCount: 2,
       variables: VARIABLES.map((variable) => ({ ...variable })),
-      pathAdditions: ['/nix/store/abcd1234-nix-direnv/bin', '/work/ws-contract/bin'],
+      pathEntries: PATH_ENTRIES.map((entry) => ({ ...entry })),
       credentials: ['API_TOKEN'],
       errorSummary: null,
       warnings: [],
@@ -117,6 +135,24 @@ function withHarness(t: TestContext, options: HarnessOptions): Promise<Harness> 
   })
 }
 
+/** The props of the one `PATH` row carrying `change`, exactly as it was rendered. */
+function pathRow(harness: Harness, panel: number, change: string): Record<string, unknown> {
+  const found = harness.react.findAll(
+    panel,
+    (instance) => instance.kind === 'host' && instance.props.className === `dsh-direnv-path dsh-direnv-path-${change}`,
+  )
+  const row = found[0]
+  if (row === undefined || row.kind === 'text') throw new Error(`the panel rendered no ${change} PATH row`)
+  return row.props
+}
+
+/** The rendered style of a row, read back as the plain object React was handed. */
+function styleOf(props: Record<string, unknown>): Record<string, unknown> {
+  const style = props.style
+  if (style === null || typeof style !== 'object') throw new Error('the row carries no style object')
+  return style as Record<string, unknown>
+}
+
 test('a real host envelope renders the panel instead of "status unavailable"', async (t) => {
   const harness = await withHarness(t, { responder: () => jsonReply(envelope()) })
   const panel = harness.mountPanel()
@@ -126,13 +162,14 @@ test('a real host envelope renders the panel instead of "status unavailable"', a
   assert.ok(harness.fetchCalls.length > 0, 'the panel polled the status route')
   assert.match(harness.fetchCalls[0]!.url, /^\/plugins\/dsh-direnv\/status\.json\?sessionId=session-contract/)
 
-  // Every section the fixture carries is on screen: names, PATH additions,
+  // Every section the fixture carries is on screen: names, the PATH diff,
   // credential roster, and the resolved directory.
   for (const name of ['API_TOKEN', 'EDITOR', 'PATH']) {
     assert.ok(text.includes(name), `variable ${name} is rendered`)
   }
-  assert.ok(text.includes('/nix/store/abcd1234-nix-direnv/bin'), 'PATH additions are rendered')
-  assert.ok(text.includes('/work/ws-contract/bin'), 'every PATH addition is rendered')
+  for (const entry of PATH_ENTRIES) {
+    assert.ok(text.includes(entry.value), `the PATH entry ${entry.value} is rendered`)
+  }
   assert.ok(text.includes('API_TOKEN'), 'the credential roster is rendered')
   assert.ok(text.includes(DIR), 'the resolved directory is rendered')
   assert.ok(text.includes('3 entries'), 'the variable count is rendered')
@@ -143,6 +180,161 @@ test('a real host envelope renders the panel instead of "status unavailable"', a
   assert.ok(!text.includes('状态不可用'), 'the panel does not report the status route as down (zh)')
   assert.ok(!text.includes('unexpected payload shape'), 'no shape error leaked into the panel')
   assert.deepEqual(harness.errorLines, [], 'the client logged no internal error')
+})
+
+test('the three PATH states render one row each, with their own colour and decoration', async (t) => {
+  const harness = await withHarness(t, { responder: () => jsonReply(envelope()) })
+  const panel = harness.mountPanel()
+  await harness.settle()
+
+  const rows = harness.react.findAll(
+    panel,
+    (instance) => instance.kind === 'host' && typeof instance.props.className === 'string' && instance.props.className.includes('dsh-direnv-path-'),
+  )
+  assert.equal(rows.length, PATH_ENTRIES.length, 'one row per diff entry, duplicates included')
+
+  const added = styleOf(pathRow(harness, panel, 'added'))
+  assert.equal(added.color, 'var(--dsw-alias-state-success-primary)', 'an added entry takes the theme success colour')
+  assert.equal(added.textDecoration, undefined, 'an added entry carries no removed-only decoration')
+
+  const removed = styleOf(pathRow(harness, panel, 'removed'))
+  assert.equal(removed.color, 'var(--dsw-alias-state-error-primary)', 'a removed entry takes the theme error colour')
+  assert.equal(removed.textDecoration, 'line-through', 'a removed entry is struck through, so colour is not the only cue')
+
+  const unchanged = styleOf(pathRow(harness, panel, 'unchanged'))
+  assert.equal(unchanged.color, 'var(--dsw-alias-label-primary)', 'an unchanged entry keeps the default foreground')
+
+  const order = rows.map((instance) =>
+    instance.kind === 'text' ? '' : String(instance.props.className).replace('dsh-direnv-path dsh-direnv-path-', ''),
+  )
+  assert.deepEqual(order, PATH_ENTRIES.map((entry) => entry.change), 'the host order is preserved: earlier means higher priority')
+  const titles = rows.map((instance) => (instance.kind === 'text' ? null : instance.props.title))
+  assert.deepEqual(titles, PATH_ENTRIES.map((entry) => entry.value), 'every row keeps its full value in title')
+
+  const text = harness.react.textOf(panel)
+  assert.ok(text.includes('Earlier entries take precedence'), 'the order/colour legend is rendered')
+})
+
+test('a long path reaches the DOM whole; only CSS may shorten it', async (t) => {
+  const longDir = `${DIR}/${'deep/'.repeat(20)}workspace`
+  const longBin = `${longDir}/bin`
+  const longEnvrc = `${longDir}/.envrc`
+  const harness = await withHarness(t, {
+    responder: () =>
+      jsonReply(
+        envelope({
+          overrides: {
+            dir: longDir,
+            envrcPath: longEnvrc,
+            pathEntries: [{ value: longBin, change: 'added' }],
+          },
+        }),
+      ),
+  })
+  const panel = harness.mountPanel()
+  await harness.settle()
+
+  const text = harness.react.textOf(panel)
+  assert.ok(text.includes(longBin), 'the PATH row carries all 126 characters, not a middle-ellipsized stub')
+  assert.ok(text.includes(longDir), 'the directory row carries the whole path')
+  assert.ok(text.includes(longEnvrc), 'the .envrc row carries the whole path')
+  assert.ok(!text.includes('\u2026'), 'no path was cut in JavaScript')
+
+  assert.equal(pathRow(harness, panel, 'added').title, longBin, 'the PATH row keeps the full value in title')
+  const titled = harness.react.findAll(panel, (instance) => instance.kind === 'host' && instance.props.title === longDir)
+  assert.equal(titled.length, 1, 'the truncated directory row still carries the full value in title')
+
+  // The DOM always held the whole path; what matters is that nothing clips it, so
+  // lock the wrapping decision down per row: the fields people read must wrap, and
+  // only the footer's one-line poll status is allowed to use the CSS ellipsis.
+  for (const [label, value] of [
+    ['directory', longDir],
+    ['envrc', longEnvrc],
+    ['PATH entry', longBin],
+  ]) {
+    const rows = harness.react.findAll(panel, (instance) => instance.kind === 'host' && instance.props.title === value)
+    assert.ok(rows.length > 0, `the ${label} row exists`)
+    for (const row of rows) {
+      assert.notEqual(row.props.style?.textOverflow, 'ellipsis', `the ${label} row must not clip`)
+    }
+    assert.ok(
+      rows.some((row) => row.props.style?.overflowWrap === 'anywhere'),
+      `the ${label} row wraps instead of clipping`,
+    )
+  }
+})
+
+test('an empty PATH component names the current directory instead of reading as "no content"', async (t) => {
+  const harness = await withHarness(t, {
+    responder: () => jsonReply(envelope({ overrides: { pathEntries: [{ value: '', change: 'added' }] } })),
+  })
+  const panel = harness.mountPanel()
+  await harness.settle()
+
+  const rows = harness.react.findAll(
+    panel,
+    (instance) => instance.kind === 'host' && instance.props.className === 'dsh-direnv-path dsh-direnv-path-added',
+  )
+  assert.equal(rows.length, 1, 'the empty component still renders its own PATH row')
+  const text = harness.react.textOf(panel)
+  assert.ok(text.includes('(empty → current directory)'), 'the empty component says what POSIX gives it: the current directory')
+  assert.ok(!text.includes('(empty)'), 'the old "this entry has no content" reading is gone')
+})
+
+test('an unset PATH is announced in the PATH card, an untouched PATH stays silent', async (t) => {
+  const harness = await withHarness(t, {
+    responder: () =>
+      jsonReply(
+        envelope({
+          overrides: {
+            variables: [
+              { name: 'EDITOR', sensitive: false, hasValue: true },
+              { name: 'PATH', sensitive: false, hasValue: false },
+            ],
+            pathEntries: [],
+          },
+        }),
+      ),
+  })
+  const panel = harness.mountPanel()
+  await harness.settle()
+
+  let text = harness.react.textOf(panel)
+  assert.ok(text.includes('PATH was removed by this .envrc'), 'the `unset PATH` tombstone is reported in the PATH card')
+  assert.ok(!text.includes('Earlier entries take precedence'), 'the card claims no diff, because there is none to read')
+
+  // The same empty diff without a tombstone must stay silent: "PATH did not
+  // change" is not "PATH was removed".
+  harness.respond(() =>
+    jsonReply(
+      envelope({
+        overrides: { variables: [{ name: 'EDITOR', sensitive: false, hasValue: true }], pathEntries: [] },
+      }),
+    ),
+  )
+  harness.tick()
+  await harness.settle()
+
+  text = harness.react.textOf(panel)
+  assert.ok(!text.includes('PATH was removed by this .envrc'), 'an untouched PATH is never reported as removed')
+  assert.ok(!text.includes('Earlier entries take precedence'), 'no PATH card is rendered without a diff or a tombstone')
+})
+
+test('no hide/show control survives, in either language', async (t) => {
+  const harness = await withHarness(t, { responder: () => jsonReply(envelope()) })
+  const panel = harness.mountPanel()
+  await harness.settle()
+
+  const buttons = harness.react.findAll(
+    panel,
+    (instance) => instance.kind === 'host' && instance.props.className === 'dsh-direnv-btn',
+  )
+  assert.equal(buttons.length, 1, 'the status card now has exactly one action: reload')
+  const text = harness.react.textOf(panel)
+  assert.ok(text.includes('Reload'), 'the surviving button is the reload action')
+  for (const gone of ['Hide this panel', 'Show the panel again', 'Panel hidden in this session', 'Polling paused']) {
+    assert.ok(!text.includes(gone), `the panel no longer renders "${gone}"`)
+  }
 })
 
 test('a flat record body still renders, so the reader tolerates both shapes', async (t) => {
@@ -298,20 +490,24 @@ test('a problem state raises one failure toast through the session input shell',
   assert.equal(harness.notifications.length, 1, 'the same problem is not announced again')
 })
 
-test('the Chinese table is what a zh locale service shows, with the honest hide copy', async (t) => {
+test('the Chinese table is what a zh locale service shows, and the hide copy is gone', async (t) => {
   const harness = await withHarness(t, { locale: 'zh', responder: () => jsonReply(envelope()) })
   const panel = harness.mountPanel()
   await harness.settle()
 
   const text = harness.react.textOf(panel)
   assert.ok(text.includes('已就绪'), 'the zh state label is rendered')
-  assert.ok(text.includes('本会话隐藏面板'), 'the hide action names what it really does')
-  assert.ok(!text.includes('本工作区禁用'), 'the old "disable in this workspace" claim is gone')
+  assert.ok(text.includes('PATH 条目'), 'the zh PATH section title is rendered')
+  assert.ok(text.includes('靠前的条目优先级更高'), 'the zh order/colour legend is rendered')
   assert.ok(text.includes('展开任意一行以获取变量值'), 'the zh value hint points at expanding a row')
+  assert.ok(!text.includes('本工作区禁用'), 'the old "disable in this workspace" claim is gone')
   assert.ok(!text.includes('exposeValues'), 'no copy points at a configuration key the host does not have')
+  for (const gone of ['本会话隐藏面板', '恢复显示面板', '已在本浏览器隐藏', '已暂停轮询']) {
+    assert.ok(!text.includes(gone), `the panel no longer renders "${gone}"`)
+  }
 })
 
-test('the three message tables stay in sync, and label.state stays deleted', () => {
+test('the three message tables stay in sync, and the dead keys stay deleted', () => {
   const source = fs.readFileSync(CLIENT_FILE, 'utf8')
   const readJson = (name: string): Record<string, unknown> => {
     const parsed: unknown = JSON.parse(fs.readFileSync(path.join(REPO, 'locale', name), 'utf8'))
@@ -360,7 +556,14 @@ test('the three message tables stay in sync, and label.state stays deleted', () 
     ['locale/zh.json', jsonZh],
     ['locale/en.json', jsonEn],
   ]
+  const deleted = ['label.state', 'label.pathAdditions', 'action.disable', 'action.enable', 'hint.hidden', 'hint.paused']
   for (const [label, keys] of tables) {
-    assert.ok(!keys.has('label.state'), `${label} no longer carries the dead label.state key`)
+    for (const key of deleted) {
+      assert.ok(!keys.has(key), `${label} no longer carries the dead ${key} key`)
+    }
+    assert.ok(keys.has('hint.pathOrder'), `${label} carries the order/colour legend`)
+    assert.ok(keys.has('hint.pathEmpty'), `${label} carries the empty-component placeholder`)
+    assert.ok(keys.has('hint.pathUnset'), `${label} carries the unset-PATH notice`)
+    assert.equal(keys.size, 59, `${label} is 59 keys wide`)
   }
 })

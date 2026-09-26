@@ -5,11 +5,12 @@
  * envelope, and the browser half reads it through `parseEnvelope`, so host and
  * browser cannot drift apart. What lives here is the panel's own reading of a
  * parsed record — deduplicated and sorted variables, the credential roster, the
- * value map — frozen so a render can never mutate a poll's answer.
+ * value map, and a frozen copy of the ordered `PATH` diff — frozen so a render
+ * can never mutate a poll's answer.
  */
 
 import { SENSITIVE } from './constants.ts'
-import type { StatusRecord } from '../src/types.ts'
+import type { PathEntry, StatusRecord } from '../src/types.ts'
 import { parseEnvelope } from '../src/wire.ts'
 
 export interface ViewVariable {
@@ -26,7 +27,7 @@ export interface ViewRecord {
   readonly envrcPath: string | null
   readonly memoHit: boolean
   readonly variables: readonly ViewVariable[]
-  readonly pathAdditions: readonly string[]
+  readonly pathEntries: readonly PathEntry[]
   readonly credentials: readonly string[]
   readonly errorSummary: string | null
   readonly warnings: readonly string[]
@@ -76,7 +77,7 @@ export function toViewRecord(record: StatusRecord): ViewRecord {
     envrcPath: record.envrcPath,
     memoHit: record.memoHit === true,
     variables: variables,
-    pathAdditions: Object.freeze([...record.pathAdditions]),
+    pathEntries: Object.freeze([...record.pathEntries]),
     credentials: credentialsOf(record, variables),
     errorSummary: record.errorSummary,
     warnings: Object.freeze([...record.warnings]),

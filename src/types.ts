@@ -324,11 +324,25 @@ export interface StatusVariable {
   hasValue: boolean
 }
 
+/** How one `PATH` component differs from the base environment's `PATH`. */
+export type PathChange = 'added' | 'removed' | 'unchanged'
+
+/**
+ * One `PATH` component as the panel shows it.
+ *
+ * `value` is the raw component, empty string included: an empty component is a
+ * real (if pathological) `PATH` element, and rendering it is the client's call.
+ */
+export interface PathEntry {
+  readonly value: string
+  readonly change: PathChange
+}
+
 export interface DerivedFacts {
   variables: StatusVariable[]
   credentials: string[]
-  /** PATH entries direnv added relative to the base PATH. */
-  pathAdditions: string[]
+  /** Ordered `PATH` diff against the base PATH (see `derive.ts` for the order). */
+  pathEntries: PathEntry[]
 }
 
 export interface StatusRecord {
@@ -339,7 +353,7 @@ export interface StatusRecord {
   envrcPath: string | null
   memoHit: boolean
   variables: StatusVariable[]
-  pathAdditions: string[]
+  pathEntries: PathEntry[]
   credentials: string[]
   errorSummary: string | null
   warnings: string[]

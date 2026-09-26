@@ -12,7 +12,7 @@
  * and no `NodeJS.*`, so the client migration can import this file as-is.
  */
 
-import type { EnvOverlay, StatusRecord, StatusVariable } from './types.ts'
+import type { EnvOverlay, PathEntry, StatusRecord, StatusVariable } from './types.ts'
 
 export interface WirePlugin {
   name: string
@@ -108,6 +108,28 @@ function parseVariables(value: unknown): StatusVariable[] {
 }
 
 /**
+ * A `PATH` diff is only readable if every entry says *which* of the three things
+ * happened, so an entry with an unknown `change` is dropped rather than guessed
+ * at — defaulting it to `unchanged` would silently claim nothing happened.
+ * `value` may be empty: an empty `PATH` component is a real element, and the
+ * panel decides how to draw it.
+ */
+function parsePathEntries(value: unknown): PathEntry[] {
+  if (!Array.isArray(value)) return []
+  const out: PathEntry[] = []
+  for (const item of value) {
+    const raw = asObject(item)
+    if (raw === null) continue
+    const entry = raw.value
+    const change = raw.change
+    if (typeof entry !== 'string') continue
+    if (change !== 'added' && change !== 'removed' && change !== 'unchanged') continue
+    out.push({ value: entry, change })
+  }
+  return out
+}
+
+/**
  * A record is only accepted when `state` is a non-empty string — that is the one
  * field every reader branches on, and the frozen contract names it as the
  * failure line. Everything else is defaulted, because a host that answers with
@@ -128,7 +150,7 @@ function parseRecord(value: unknown, fallbackDir: string | null): StatusRecord |
     envrcPath,
     memoHit: raw.memoHit === true,
     variables: parseVariables(raw.variables),
-    pathAdditions: strings(raw.pathAdditions),
+    pathEntries: parsePathEntries(raw.pathEntries),
     credentials: strings(raw.credentials),
     errorSummary,
     warnings: strings(raw.warnings),

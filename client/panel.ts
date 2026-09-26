@@ -1,22 +1,27 @@
 /**
- * The right-column panel: the header with its state pill, the status card, the
- * environment sections, and the hide/show control. It renders whatever the last
- * poll answered and never blocks: a poll in flight leaves the previous answer on
- * screen, and a failed poll says so in the footer instead of emptying the panel.
+ * The right-column panel: the header with its state pill, the status card and
+ * the environment sections. It renders whatever the last poll answered and never
+ * blocks: a poll in flight leaves the previous answer on screen, and a failed
+ * poll says so in the footer instead of emptying the panel.
+ *
+ * Paths are never shortened in JavaScript, and the path fields people actually
+ * read (the working directory, the `.envrc` it comes from, every PATH entry) wrap
+ * instead of being clipped, so a deep path stays readable and copyable; only the
+ * footer's one-line poll status still truncates through CSS. Every wrapped field
+ * keeps its full value in `title` as well.
  *
  * The keyed seats this component fills are registered in `index.ts`; the key
  * there is the tab type's `id`, because a `kind` key silently renders nothing.
  */
 
 import { POLL_MS } from './constants.ts'
-import { firstLine, formatClock, formatMs, ellipsizeMiddle } from './format.ts'
-import { readHidden, writeHidden } from './hidden.ts'
+import { firstLine, formatClock, formatMs } from './format.ts'
 import type { StatusHub, StatusState } from './hub.ts'
 import type { Translate } from './messages.ts'
 import { h, fragment, useEffect, useState } from './react.ts'
 import { S } from './styles.ts'
 import type { ToneName } from './styles.ts'
-import { Credentials, EnvDetails, PathAdditions } from './env-details.ts'
+import { Credentials, EnvDetails, PathEntries, pathWasRemoved } from './env-details.ts'
 
 export interface PanelProps {
   sessionId: string | undefined
@@ -99,12 +104,20 @@ function Tone(props: { tone: ToneName; children?: unknown }): unknown {
   return h('span', { style: { ...S.pillBase, ...style } }, props.children)
 }
 
-function Line(props: { label: unknown; mono?: boolean | undefined; title?: string | undefined; children?: unknown }): unknown {
+function Line(props: {
+  label: unknown
+  mono?: boolean | undefined
+  /** A single-line field: CSS ellipsis, with the full value left in `title`. */
+  truncate?: boolean | undefined
+  title?: string | undefined
+  children?: unknown
+}): unknown {
+  const style = { ...S.value, ...(props.mono === true ? S.mono : {}), ...(props.truncate === true ? S.truncate : {}) }
   return h(
     'div',
     { style: S.row },
     h('span', { style: S.label }, props.label),
-    h('span', { style: props.mono === true ? { ...S.value, ...S.mono } : S.value, title: props.title }, props.children),
+    h('span', { style: style, title: props.title }, props.children),
   )
 }
 
@@ -151,14 +164,6 @@ export function DirenvPanel(props: PanelProps): unknown {
   const hub = props.hub
   const sessionId = props.sessionId
   const snapshot = useStatus(hub, sessionId)
-  const [hidden, setHidden] = useState(() => (sessionId ? readHidden(sessionId) : false))
-  const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    if (!copied) return undefined
-    const timer = setTimeout(() => setCopied(false), 1400)
-    return () => clearTimeout(timer)
-  }, [copied])
 
   if (!sessionId) {
     return h('div', { style: S.root }, h('div', { style: S.muted }, t('hint.noSession')))
@@ -182,23 +187,13 @@ export function DirenvPanel(props: PanelProps): unknown {
       .then(() => handle.release())
   }
 
-  const onToggleHidden = (): void => {
-    const next = !hidden
-    writeHidden(sessionId, next)
-    setHidden(next)
-    if (hub !== undefined && hub !== null) {
-      const handle = hub.watch(sessionId, {})
-      handle.sync()
-      handle.release()
-    }
-  }
-
   const state = record !== null ? record.state : transportError !== null ? 'route-down' : answered ? 'idle' : 'loading'
   const tone = STATE_TONES[state] ?? 'warn'
   const envrcPath = record !== null ? record.envrcPath : null
   const duration = record !== null ? formatMs(record.ms) : null
   const clock = record !== null ? formatClock(record.at) : null
   const dir = record !== null ? record.dir : ''
+  const pollText = `${t('hint.poll', { seconds: Math.round(POLL_MS / 100) / 10 })}${dir !== '' ? ` · ${dir}` : ''}`
 
   const onReveal = (anyOpen: boolean): void => {
     if (hub === undefined || hub === null) return
@@ -215,103 +210,73 @@ export function DirenvPanel(props: PanelProps): unknown {
     ),
   ]
 
-  if (hidden) {
-    children.push(
+  children.push(
+    h(
+      'div',
+      { key: 'status', style: S.card },
+      envrcPath !== null
+        ? h(Line, { key: 'envrc', label: t('label.envrcPath'), mono: true, title: envrcPath }, envrcPath)
+        : h(Line, { key: 'envrc', label: t('label.envrcPath') }, t('hint.valueUnset')),
+      dir !== '' ? h(Line, { key: 'dir', label: t('label.dir'), mono: true, title: dir }, dir) : null,
+      duration !== null ? h(Line, { key: 'ms', label: t('label.duration') }, duration) : null,
+      clock !== null ? h(Line, { key: 'at', label: t('label.updated') }, clock) : null,
+      h(
+        Line,
+        { key: 'memo', label: t('label.memoHit') },
+        record !== null && record.memoHit ? t('label.memoHitYes') : t('label.memoHitNo'),
+      ),
+      answered && record === null && transportError === null
+        ? h('div', { key: 'no-workspace', style: S.caption }, t('hint.noWorkspace'))
+        : null,
+      record !== null && record.errorSummary !== null
+        ? h(
+            'div',
+            { key: 'error', style: { ...S.card, padding: '6px 8px', background: 'transparent' } },
+            h('div', { style: S.sectionTitle }, t('label.error')),
+            h('pre', { className: 'dsh-direnv-pre', style: S.pre }, record.errorSummary),
+          )
+        : null,
+      record !== null && record.warnings.length > 0
+        ? h(
+            'div',
+            { key: 'warnings', style: S.list },
+            h('div', { style: S.sectionTitle }, t('label.warnings')),
+            record.warnings.map((warning) => h('div', { key: warning, style: S.caption }, warning)),
+          )
+        : null,
       h(
         'div',
-        { key: 'hidden', style: S.warnBox },
-        h('div', null, t('hint.hidden')),
-        h('div', { style: S.caption }, t('hint.paused')),
-      ),
-    )
-  } else {
-    children.push(
-      h(
-        'div',
-        { key: 'status', style: S.card },
-        envrcPath !== null
-          ? h(Line, { key: 'envrc', label: t('label.envrcPath'), mono: true, title: envrcPath }, ellipsizeMiddle(envrcPath, 46))
-          : h(Line, { key: 'envrc', label: t('label.envrcPath') }, t('hint.valueUnset')),
-        dir !== ''
-          ? h(Line, { key: 'dir', label: t('label.dir'), mono: true, title: dir }, ellipsizeMiddle(dir, 46))
-          : null,
-        duration !== null ? h(Line, { key: 'ms', label: t('label.duration') }, duration) : null,
-        clock !== null ? h(Line, { key: 'at', label: t('label.updated') }, clock) : null,
+        { key: 'actions', style: S.actions },
         h(
-          Line,
-          { key: 'memo', label: t('label.memoHit') },
-          record !== null && record.memoHit ? t('label.memoHitYes') : t('label.memoHitNo'),
-        ),
-        answered && record === null && transportError === null
-          ? h('div', { key: 'no-workspace', style: S.caption }, t('hint.noWorkspace'))
-          : null,
-        record !== null && record.errorSummary !== null
-          ? h(
-              'div',
-              { key: 'error', style: { ...S.card, padding: '6px 8px', background: 'transparent' } },
-              h('div', { style: S.sectionTitle }, t('label.error')),
-              h('pre', { className: 'dsh-direnv-pre', style: S.pre }, record.errorSummary),
-            )
-          : null,
-        record !== null && record.warnings.length > 0
-          ? h(
-              'div',
-              { key: 'warnings', style: S.list },
-              h('div', { style: S.sectionTitle }, t('label.warnings')),
-              record.warnings.map((warning) => h('div', { key: warning, style: S.caption }, warning)),
-            )
-          : null,
-        h(
-          'div',
-          { key: 'actions', style: S.actions },
-          h(
-            Button,
-            { key: 'reload', disabled: forcing, title: t('action.reload'), onClick: onReload },
-            forcing ? t('action.reloading') : t('action.reload'),
-          ),
-          h(
-            Button,
-            {
-              key: 'hide',
-              title: t('action.disable'),
-              onClick: () => {
-                onToggleHidden()
-                setCopied(false)
-              },
-            },
-            t('action.disable'),
-          ),
+          Button,
+          { key: 'reload', disabled: forcing, title: t('action.reload'), onClick: onReload },
+          forcing ? t('action.reloading') : t('action.reload'),
         ),
       ),
-    )
+    ),
+  )
 
-    if (record !== null && record.variables.length > 0) {
-      children.push(h(EnvDetails, { key: 'env', t: t, record: record, onReveal: onReveal }))
-    }
-    if (record !== null && record.pathAdditions.length > 0) {
-      children.push(h(PathAdditions, { key: 'path', t: t, items: record.pathAdditions }))
-    }
-    if (record !== null && record.credentials.length > 0) {
-      children.push(h(Credentials, { key: 'creds', t: t, names: record.credentials }))
-    }
-
-    children.push(
-      h(
-        'div',
-        { key: 'footer', style: S.card },
-        transportError !== null
-          ? h('div', { style: S.muted }, `${t('hint.routeDown')} — ${firstLine(transportError, 80)}`)
-          : null,
-        h(
-          'div',
-          { style: S.caption },
-          t('hint.poll', { seconds: Math.round(POLL_MS / 100) / 10 }),
-          record !== null && record.dir !== '' ? ` · ${ellipsizeMiddle(record.dir, 36)}` : '',
-        ),
-        h(Button, { key: 'show', onClick: onToggleHidden, title: t('action.enable') }, t('action.enable')),
-      ),
-    )
+  if (record !== null && record.variables.length > 0) {
+    children.push(h(EnvDetails, { key: 'env', t: t, record: record, onReveal: onReveal }))
   }
+  const pathRemoved = record !== null && pathWasRemoved(record.variables, record.pathEntries)
+  if (record !== null && (record.pathEntries.length > 0 || pathRemoved)) {
+    children.push(h(PathEntries, { key: 'path', t: t, entries: record.pathEntries, unset: pathRemoved }))
+  }
+  if (record !== null && record.credentials.length > 0) {
+    children.push(h(Credentials, { key: 'creds', t: t, names: record.credentials }))
+  }
+
+  children.push(
+    h(
+      'div',
+      { key: 'footer', style: S.card },
+      transportError !== null
+        ? h('div', { style: S.muted }, `${t('hint.routeDown')} — ${firstLine(transportError, 80)}`)
+        : null,
+      h('div', { style: { ...S.caption, ...S.truncate }, title: pollText }, pollText),
+    ),
+  )
 
   return h('div', { className: 'dsh-direnv-root', style: S.root }, children)
 }

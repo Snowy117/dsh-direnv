@@ -80,7 +80,7 @@ function fakeEvaluator({ env = {}, delayMs = 0, fail = false }: FakeEvaluatorOpt
         envrcPath: null,
         memoHit: false,
         variables: [],
-        pathAdditions: [],
+        pathEntries: [],
         credentials: [],
         errorSummary: null,
         warnings: [],
@@ -320,7 +320,7 @@ function statusOf(overrides: Partial<StatusRecord>): StatusRecord {
     envrcPath: '/work/a/.envrc',
     memoHit: false,
     variables: [{ name: 'FOO', sensitive: false, hasValue: true }],
-    pathAdditions: ['/nix/store/devshell/bin'],
+    pathEntries: [{ value: '/nix/store/devshell/bin', change: 'added' }],
     credentials: [],
     errorSummary: null,
     warnings: [],
@@ -337,6 +337,33 @@ test('the first notice is a baseline and never repeats unchanged state', () => {
   assert.match(first!.text, /1 variable/)
   assert.match(first!.text, /1 PATH entry added/)
   assert.equal(tracker.observe('s1', statusOf({})), null)
+})
+
+test('a PATH that shrinks is reported as a count, and no path component is ever quoted', () => {
+  const tracker = createNoticeTracker()
+  const entries: StatusRecord['pathEntries'] = [
+    { value: '/nix/store/devshell/bin', change: 'added' },
+    { value: '/opt/removed-one', change: 'removed' },
+    { value: '/opt/removed-two', change: 'removed' },
+    { value: '/usr/bin', change: 'unchanged' },
+  ]
+  const notice = tracker.observe('s1', statusOf({ pathEntries: entries }))
+  assert.match(notice!.text, /1 PATH entry added, 2 removed/)
+  assert.doesNotMatch(notice!.text, /\/opt\/removed-one|\/opt\/removed-two/)
+})
+
+test('a re-evaluation whose PATH only lost entries says so without naming them', () => {
+  const tracker = createNoticeTracker()
+  tracker.observe('s1', statusOf({}))
+  const delta = tracker.observe(
+    's1',
+    statusOf({
+      pathEntries: [{ value: '/nix/store/devshell/bin', change: 'removed' }],
+      ms: 43,
+    }),
+  )
+  assert.match(delta!.text, /PATH: 1 PATH entry removed/)
+  assert.doesNotMatch(delta!.text, /\/nix\/store\/devshell/)
 })
 
 test('a changed variable set produces a delta naming what moved', () => {
@@ -374,9 +401,9 @@ test('a blocked workspace tells the model not to approve it itself', () => {
 
 test('a workspace without an .envrc still reassures the model once', () => {
   const tracker = createNoticeTracker()
-  const notice = tracker.observe('s1', statusOf({ state: 'absent', envrcPath: null, variables: [], pathAdditions: [] }))
+  const notice = tracker.observe('s1', statusOf({ state: 'absent', envrcPath: null, variables: [], pathEntries: [] }))
   assert.match(notice!.text, /No \.envrc applies/)
-  assert.equal(tracker.observe('s1', statusOf({ state: 'absent', envrcPath: null, variables: [], pathAdditions: [] })), null)
+  assert.equal(tracker.observe('s1', statusOf({ state: 'absent', envrcPath: null, variables: [], pathEntries: [] })), null)
 })
 
 test('a credential baseline mentions the count, never the names', () => {
@@ -442,7 +469,7 @@ test('the failure notice does not stutter the exit status', () => {
   const tracker = createNoticeTracker()
   const notice = tracker.observe(
     's1',
-    statusOf({ state: 'envrc-failed', errorSummary: 'exit status 7', variables: [], pathAdditions: [] }),
+    statusOf({ state: 'envrc-failed', errorSummary: 'exit status 7', variables: [], pathEntries: [] }),
   )
   assert.doesNotMatch(notice!.text, /exit status exit status/)
   assert.match(notice!.text, /exit status 7/)
