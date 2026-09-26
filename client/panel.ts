@@ -168,6 +168,7 @@ export function DirenvPanel(props: PanelProps): unknown {
   }
 
   const record = snapshot !== null && snapshot !== undefined ? snapshot.record : null
+  const version = snapshot !== null && snapshot !== undefined ? snapshot.version : ''
   const transportError = snapshot !== null && snapshot !== undefined ? snapshot.error : null
   const forcing = snapshot !== null && snapshot !== undefined && snapshot.forcing === true
   const answered = snapshot !== null && snapshot !== undefined && snapshot.at !== null
@@ -210,6 +211,7 @@ export function DirenvPanel(props: PanelProps): unknown {
         { key: 'state', style: L.chips },
         h(UI.StateDot, { key: 'dot', state: face.dot }),
         h(UI.Tag, { key: 'label', tone: face.tone, children: stateLabel(t, state) }),
+        version === '' ? null : h(UI.Tag, { key: 'version', tone: 'quiet', children: `v${version}` }),
       ),
       envrcPath !== null
         ? h(Fact, { key: 'envrc', label: t('label.envrcPath'), children: h(UI.PathLabel, { path: envrcPath }) })

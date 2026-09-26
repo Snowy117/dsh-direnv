@@ -24,6 +24,7 @@ export type NotifyFn = (level: string, text: string) => boolean
 
 export interface StatusState {
   readonly record: ViewRecord | null
+  readonly version: string
   readonly error: string | null
   readonly attempts: number
   readonly at: number | null
@@ -189,6 +190,7 @@ export function createStatusHub(ctx: ClientContext, t: Translate): StatusHub {
         monitor.failures = 0
         publish(monitor, {
           record: answer.record,
+          version: answer.version,
           error: null,
           attempts: 0,
           at: monitor.lastOkAt,
@@ -277,6 +279,7 @@ export function createStatusHub(ctx: ClientContext, t: Translate): StatusHub {
       valuesWanted: false,
       state: Object.freeze({
         record: null,
+        version: '',
         error: null,
         attempts: 0,
         at: null,

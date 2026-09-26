@@ -36,6 +36,8 @@ export interface ViewRecord {
 
 export interface StatusBody {
   readonly record: ViewRecord | null
+  /** The host half's own version, straight from the envelope; empty when absent. */
+  readonly version: string
 }
 
 function variablesOf(record: StatusRecord): readonly ViewVariable[] {
@@ -99,5 +101,8 @@ export function toViewRecord(record: StatusRecord): ViewRecord {
 export function readStatusBody(payload: unknown): StatusBody | null {
   const envelope = parseEnvelope(payload)
   if (envelope === null) return null
-  return { record: envelope.status === null ? null : toViewRecord(envelope.status) }
+  return {
+    record: envelope.status === null ? null : toViewRecord(envelope.status),
+    version: envelope.plugin === null ? '' : envelope.plugin.version,
+  }
 }

@@ -24,7 +24,7 @@ import type {
 } from './types.ts'
 
 const PLUGIN_NAME = 'dsh-direnv'
-const PLUGIN_VERSION = '0.1.0'
+const PLUGIN_VERSION = '0.1.0-alpha.1'
 const LLM_PACKAGE = '@deepseek-ai/dsh-llm'
 const MAX_TRACKED_SESSIONS = 512
 

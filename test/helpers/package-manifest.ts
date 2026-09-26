@@ -19,6 +19,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 export const REPO = path.resolve(HERE, '..', '..')
 
 export interface PackageManifest {
+  /** `version`: what the status route reports and the panel prints. */
+  version: string
   /** `exports["./client"]`, resolved against the repository root. */
   clientFile: string
   /** `dsh.client.inject`: the exact list the boot payload has to carry. */
@@ -31,11 +33,13 @@ function readManifest(): PackageManifest {
   const exportsField = parsed.exports
   const clientFile = isRecord(exportsField) ? exportsField['./client'] : undefined
   if (typeof clientFile !== 'string') throw new Error('package.json carries no exports["./client"]')
+  const version = parsed.version
+  if (typeof version !== 'string' || version === '') throw new Error('package.json carries no version')
   const dsh = parsed.dsh
   const client = isRecord(dsh) ? dsh.client : undefined
   const inject = isRecord(client) ? client.inject : undefined
   if (!isStringArray(inject)) throw new Error('package.json carries no dsh.client.inject list')
-  return { clientFile: path.resolve(REPO, clientFile), clientInject: inject }
+  return { version: version, clientFile: path.resolve(REPO, clientFile), clientInject: inject }
 }
 
 export const MANIFEST: PackageManifest = readManifest()

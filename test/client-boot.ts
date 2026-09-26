@@ -322,6 +322,13 @@ async function checkStatusRoute(base: string, cookie: string, ws: string): Promi
   check(payload !== null, 'force=1 drives the evaluation to ok');
   if (payload === null) return;
   check(payload.plugin?.name === 'dsh-direnv', 'payload identifies the plugin');
+  // The panel prints this string, so a constant that drifted from the manifest
+  // would ship a version nobody can match to the tarball.
+  check(
+    payload.plugin?.version === MANIFEST.version,
+    'the served version matches package.json',
+    `${String(payload.plugin?.version)} vs ${String(MANIFEST.version)}`,
+  );
   check(payload.dir === ws, 'payload echoes the resolved directory');
   check(
     payload.status.variables.some((entry) => entry.name === 'CLIENT_BOOT_VAR'),

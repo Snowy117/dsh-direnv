@@ -86,7 +86,7 @@ export const PATH_ENTRIES: EnvelopePathEntry[] = [
 export function envelope({ state = 'ok', env = null, overrides = {} }: EnvelopeOptions = {}): Envelope {
   return {
     ok: true,
-    plugin: { name: 'dsh-direnv', version: '0.1.0' },
+    plugin: { name: 'dsh-direnv', version: '0.1.0-alpha.1' },
     sessionId: SESSION,
     dir: DIR,
     status: {
@@ -119,7 +119,7 @@ export function noWorkspaceEnvelope(): {
   status: null
   gate: null
 } {
-  return { ok: true, plugin: { name: 'dsh-direnv', version: '0.1.0' }, sessionId: SESSION, dir: null, status: null, gate: null }
+  return { ok: true, plugin: { name: 'dsh-direnv', version: '0.1.0-alpha.1' }, sessionId: SESSION, dir: null, status: null, gate: null }
 }
 
 /** A record with the envelope stripped off, which the reader must still accept. */

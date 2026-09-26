@@ -45,6 +45,19 @@ async function withValues(
   return { harness, panel }
 }
 
+test('the panel shows the host half version where it also shows the state', async (t) => {
+  const harness = await withHarness(t, { responder: () => jsonReply(envelope()) })
+  const panel = harness.mountPanel()
+  await harness.settle()
+
+  const versionTags = harness
+    .primitives(panel, 'Tag')
+    .filter((instance) => instance.props.children === 'v0.1.0-alpha.1')
+  assert.equal(versionTags.length, 1, 'the version is rendered once, next to the state')
+  assert.equal(versionTags[0]!.props.tone, 'quiet', 'and it stays quiet so it never competes with the state')
+  assert.ok(harness.react.textOf(panel).includes('v0.1.0-alpha.1'), 'the version is on screen')
+})
+
 test('the three sections are official disclosure rows, and none of them is a tag chip', async (t) => {
   const harness = await withHarness(t, { responder: () => jsonReply(envelope()) })
   const panel = harness.mountPanel()

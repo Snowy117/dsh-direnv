@@ -1,6 +1,6 @@
 {
   "name": "dsh-direnv",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha.1",
   "description": "Load each workspace's direnv environment into every command the DeepSeek Harness runs — automatically, per working directory. 让 DSH 每个工作区的子进程自动带上该工作区的 direnv 环境。",
   "type": "module",
   "license": "MIT",
