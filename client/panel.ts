@@ -223,7 +223,7 @@ export function DirenvPanel(props: PanelProps): unknown {
             children: h(UI.Tooltip, {
               label: clock,
               portal: true,
-              children: h('span', { style: L.inline }, age),
+              children: h('span', { style: L.text }, age),
             }),
           })
         : null,

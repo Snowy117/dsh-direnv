@@ -1,10 +1,17 @@
 /**
- * Environment details: masked values, per-row reveal, name search, name copying,
- * and the `PATH` diff.
+ * Environment details: the variable list, the `PATH` diff and the credential
+ * roster.
  *
- * Row state is component-local, so a poll never collapses a row the reader
- * opened. Values arrive only while at least one row is open — the panel asks the
- * host for them on reveal and stops asking on collapse.
+ * Every section is one official `DisclosureRow`, which is also the panel's only
+ * header typography: the disclosed body carries `L.sectionBody`, the official
+ * leading geometry, so nothing a section shows can sit left of the title it
+ * belongs to. Section and row state are component-local, so a poll never
+ * collapses what the reader opened.
+ *
+ * Values arrive only while at least one row is open — the panel asks the host
+ * for them on reveal and stops asking on collapse — so an open row can render an
+ * empty value for one poll. There is no mask and no placeholder: a value is
+ * shown as the bytes the host sent, or the row says it has none.
  *
  * The reading order of the `PATH` card is the host's own: the diff arrives as an
  * ordered list of entries, each already marked added, removed or unchanged, so
@@ -15,7 +22,6 @@
  * shortened in JavaScript.
  */
 
-import { MASK } from './format.ts'
 import type { Translate } from './messages.ts'
 import type { IconProps, Primitives, TagTone } from './primitives.ts'
 import { ui } from './primitives.ts'
@@ -37,12 +43,44 @@ export interface EnvDetailsProps {
   onReveal?: ((anyOpen: boolean) => void) | undefined
 }
 
-function valueText(t: Translate, record: ViewRecord, variable: ViewVariable, revealed: boolean): string {
-  if (record.env === null) return variable.hasValue ? MASK : t('hint.valueUnset')
-  const raw = Object.prototype.hasOwnProperty.call(record.env, variable.name) ? record.env[variable.name] : undefined
-  if (raw === undefined || raw === null) return t('hint.valueRemoved')
-  if (revealed) return String(raw)
-  return MASK
+interface SectionProps {
+  icon: IconPart
+  title: string
+  open: boolean
+  onToggle: () => void
+  children?: unknown
+}
+
+/** One collapsible section: the official row as the header, its body indented under the title. */
+function Section(props: SectionProps): unknown {
+  const UI = ui()
+  return h(UI.DisclosureRow, {
+    icon: h(props.icon, { size: 14 }),
+    title: props.title,
+    open: props.open,
+    expandable: true,
+    expandOnRowClick: true,
+    onToggle: props.onToggle,
+    children: h('div', { style: L.sectionBody }, props.children),
+  })
+}
+
+/** The section headers start open; the credential roster is the reader's to open. */
+function useSection(initial: boolean): [boolean, () => void] {
+  const [open, setOpen] = useState(initial)
+  return [open, () => setOpen(!open)]
+}
+
+/**
+ * The value the host sent for one name, or `undefined` when the poll carried no
+ * value map (values are fetched only while a row is open) or the name is gone
+ * from it. `undefined` is never rendered as text and never reaches the clipboard.
+ */
+function valueOf(record: ViewRecord, name: string): string | undefined {
+  if (record.env === null) return undefined
+  if (!Object.prototype.hasOwnProperty.call(record.env, name)) return undefined
+  const raw = record.env[name]
+  return raw === undefined || raw === null ? undefined : String(raw)
 }
 
 export function EnvDetails(props: EnvDetailsProps): unknown {
@@ -52,6 +90,7 @@ export function EnvDetails(props: EnvDetailsProps): unknown {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState<readonly string[]>([])
   const [copied, setCopied] = useState('')
+  const [shown, toggleShown] = useSection(true)
 
   useEffect(() => {
     if (copied === '') return undefined
@@ -74,9 +113,9 @@ export function EnvDetails(props: EnvDetailsProps): unknown {
     setOpen(next)
     announce(next)
   }
-  const copy = (name: string): void => {
+  const copy = (name: string, value: string): void => {
     try {
-      Promise.resolve(UI.writeClipboard(name))
+      Promise.resolve(UI.writeClipboard(value))
         .then((ok) => {
           if (ok === true) setCopied(name)
         })
@@ -94,6 +133,10 @@ export function EnvDetails(props: EnvDetailsProps): unknown {
 
   const row = (variable: ViewVariable): unknown => {
     const isOpen = open.includes(variable.name)
+    const value = valueOf(record, variable.name)
+    const copyable = value !== undefined
+    // The control carries no text, so its title is also its accessible name.
+    const label = copied === variable.name ? t('hint.copied') : t('action.copyValue')
     return h(UI.DisclosureRow, {
       key: variable.name,
       icon: h(UI.IconSlidersTwoOutlineRegular, { size: 14 }),
@@ -101,25 +144,26 @@ export function EnvDetails(props: EnvDetailsProps): unknown {
       open: isOpen,
       expandable: true,
       expandOnRowClick: true,
-      keepContentWhenOpen: true,
       onToggle: () => toggle(variable.name),
-      collapsedContent: h(UI.Tooltip, {
-        label: isOpen ? t('action.hide') : t('action.reveal'),
-        portal: true,
-        children: h('span', { style: L.inline }, h(UI.Tag, { tone: 'quiet', children: valueText(t, record, variable, false) })),
-      }),
       children: h(
         'div',
-        { style: L.row },
-        h('span', { key: 'value', style: L.value }, valueText(t, record, variable, true)),
-        h(UI.Button, {
-          key: 'copy',
-          variant: 'toolbar',
-          size: 'sm',
-          icon: h(UI.IconCopyOutlineRegular, { size: 14 }),
-          title: t('action.copyName'),
-          onClick: () => copy(variable.name),
-        }),
+        { style: L.valueRow },
+        h(
+          'span',
+          { key: 'value', style: L.code },
+          copyable ? value : record.env === null ? t('hint.valuePending') : t('hint.valueRemoved'),
+        ),
+        copyable
+          ? h(UI.Button, {
+              key: 'copy',
+              variant: 'toolbar',
+              size: 'sm',
+              icon: h(copied === variable.name ? UI.IconCheckOutlineRegular : UI.IconCopyOutlineRegular, { size: 14 }),
+              title: label,
+              'aria-label': label,
+              onClick: () => copy(variable.name, value),
+            })
+          : null,
       ),
     })
   }
@@ -127,29 +171,28 @@ export function EnvDetails(props: EnvDetailsProps): unknown {
   return h(
     'div',
     { style: L.group },
-    h(UI.Tag, { key: 'title', tone: 'outline', children: t('label.variables') }),
-    record.variables.length > 6
-      ? h(UI.Input, {
-          key: 'search',
-          type: 'search',
-          value: query,
-          placeholder: t('label.search'),
-          'aria-label': t('label.search'),
-          icon: h(UI.IconSearchOutlineRegular, { size: 14 }),
-          onChange: (event: ValueChangeEvent) => setQuery(event.target.value),
-        })
-      : null,
-    h(
-      'div',
-      { key: 'count', style: L.chips },
-      h(UI.Pill, { key: 'count', children: t('label.count', { count: rows.length }) }),
-      record.env === null ? h('span', { key: 'values', style: L.text }, t('hint.noValues')) : null,
-      h('span', { key: 'copy', style: L.text }, copied === '' ? t('hint.copyHint') : t('hint.copied')),
-    ),
-    rows.length === 0
-      ? h('span', { key: 'empty', style: L.text }, t('hint.empty'))
-      : h('div', { key: 'rows', style: L.scroll }, rows.map(row)),
-    h('span', { key: 'masked', style: L.text }, t('hint.masked')),
+    h(Section, {
+      key: 'section',
+      icon: UI.IconFlatListOutlineRegular,
+      title: t('label.variables'),
+      open: shown,
+      onToggle: toggleShown,
+      children: [
+        record.variables.length > 6
+          ? h(UI.Input, {
+              key: 'search',
+              type: 'search',
+              value: query,
+              placeholder: t('label.search'),
+              'aria-label': t('label.search'),
+              icon: h(UI.IconSearchOutlineRegular, { size: 14 }),
+              onChange: (event: ValueChangeEvent) => setQuery(event.target.value),
+            })
+          : null,
+        h('div', { key: 'count', style: L.chips }, h(UI.Pill, { children: t('label.count', { count: rows.length }) })),
+        h('div', { key: 'rows', style: L.scroll }, rows.map(row)),
+      ],
+    }),
   )
 }
 
@@ -184,31 +227,29 @@ export function PathEntries(props: PathEntriesProps): unknown {
   const UI = ui()
   const t = props.t
   const entries = props.entries
-  const body =
-    entries.length === 0
-      ? h('span', { key: 'none', style: L.text }, props.unset ? t('hint.pathUnset') : t('hint.empty'))
-      : h(
-          'div',
-          { key: 'list', style: L.group },
-          entries.map((entry, index) => {
-            const face = pathFace(UI, entry.change)
-            const label =
-              entry.value === '' ? t('hint.pathEmpty') : h(UI.PathLabel, { key: 'path', path: entry.value })
-            return h(UI.Tag, {
-              // The same component may repeat in a PATH, so position is part of the key.
-              key: `${String(index)}\u0000${entry.value}`,
-              tone: face.tone,
-              children: face.icon === null ? label : [h(face.icon, { key: 'mark', size: 12 }), label],
-            })
-          }),
-        )
-  return h(
-    'div',
-    { style: L.group },
-    h(UI.Tag, { key: 'title', tone: 'outline', children: t('label.path') }),
-    props.unset ? null : h('span', { key: 'order', style: L.text }, t('hint.pathOrder')),
-    body,
-  )
+  const [open, toggleOpen] = useSection(true)
+  const list = entries.map((entry, index) => {
+    const face = pathFace(UI, entry.change)
+    const label = entry.value === '' ? t('hint.pathEmpty') : h(UI.PathLabel, { key: 'path', path: entry.value })
+    return h(UI.Tag, {
+      // The same component may repeat in a PATH, so position is part of the key.
+      key: `${String(index)}\u0000${entry.value}`,
+      tone: face.tone,
+      children: face.icon === null ? label : [h(face.icon, { key: 'mark', size: 12 }), label],
+    })
+  })
+  return h(Section, {
+    icon: UI.IconFolderOpenOutlineRegular,
+    title: t('label.path'),
+    open: open,
+    onToggle: toggleOpen,
+    children:
+      entries.length === 0
+        ? props.unset
+          ? h('span', { style: L.text }, t('hint.pathUnset'))
+          : null
+        : h('div', { style: L.group }, list),
+  })
 }
 
 export interface CredentialsProps {
@@ -219,19 +260,16 @@ export interface CredentialsProps {
 export function Credentials(props: CredentialsProps): unknown {
   const UI = ui()
   const t = props.t
-  const names = props.names
-  return h(
-    'div',
-    { style: L.group },
-    h(UI.Tag, {
-      key: 'title',
-      tone: 'warning',
-      children: `${t('label.credentials')} · ${t('hint.credentials')}`,
-    }),
-    h(
+  const [open, toggleOpen] = useSection(false)
+  return h(Section, {
+    icon: UI.IconShieldOutlineRegular,
+    title: t('label.credentials'),
+    open: open,
+    onToggle: toggleOpen,
+    children: h(
       'div',
-      { key: 'names', style: L.chips },
-      names.map((name) => h(UI.Tag, { key: name, tone: 'warning', children: name })),
+      { style: L.chips },
+      props.names.map((name) => h(UI.Tag, { key: name, tone: 'warning', children: name })),
     ),
-  )
+  })
 }

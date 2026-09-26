@@ -78,6 +78,7 @@ export interface ButtonProps {
   icon?: unknown
   className?: string | undefined
   title?: string | undefined
+  'aria-label'?: string | undefined
   disabled?: boolean | undefined
   onClick?: (() => void) | undefined
   children?: unknown
@@ -127,11 +128,15 @@ export interface Primitives {
   StateDot: Component<StateDotProps>
   Tag: Component<TagProps>
   Tooltip: Component<TooltipProps>
+  IconCheckOutlineRegular: Component<IconProps>
   IconCloseOutlineRegular: Component<IconProps>
   IconCopyOutlineRegular: Component<IconProps>
+  IconFlatListOutlineRegular: Component<IconProps>
+  IconFolderOpenOutlineRegular: Component<IconProps>
   IconPlusOutlineRegular: Component<IconProps>
   IconRefreshOutlineRegular: Component<IconProps>
   IconSearchOutlineRegular: Component<IconProps>
+  IconShieldOutlineRegular: Component<IconProps>
   IconSlidersTwoOutlineRegular: Component<IconProps>
   relativeTime(at: number, now: number): RelativeTime
   writeClipboard(text: string): Promise<boolean>
@@ -187,11 +192,15 @@ export function installPrimitives(load: RequireFn): void {
       StateDot: part(namespace, 'StateDot'),
       Tag: part(namespace, 'Tag'),
       Tooltip: part(namespace, 'Tooltip'),
+      IconCheckOutlineRegular: part(namespace, 'IconCheckOutlineRegular'),
       IconCloseOutlineRegular: part(namespace, 'IconCloseOutlineRegular'),
       IconCopyOutlineRegular: part(namespace, 'IconCopyOutlineRegular'),
+      IconFlatListOutlineRegular: part(namespace, 'IconFlatListOutlineRegular'),
+      IconFolderOpenOutlineRegular: part(namespace, 'IconFolderOpenOutlineRegular'),
       IconPlusOutlineRegular: part(namespace, 'IconPlusOutlineRegular'),
       IconRefreshOutlineRegular: part(namespace, 'IconRefreshOutlineRegular'),
       IconSearchOutlineRegular: part(namespace, 'IconSearchOutlineRegular'),
+      IconShieldOutlineRegular: part(namespace, 'IconShieldOutlineRegular'),
       IconSlidersTwoOutlineRegular: part(namespace, 'IconSlidersTwoOutlineRegular'),
       relativeTime: member(namespace, 'relativeTime') as Primitives['relativeTime'],
       writeClipboard: member(namespace, 'writeClipboard') as Primitives['writeClipboard'],

@@ -5,9 +5,6 @@
  * every caller puts the result straight into a row that may not exist at all.
  */
 
-/** The mask a value wears until the operator expands its row. */
-export const MASK = '\u2022\u2022\u2022\u2022'
-
 /** The first line of a multi-line host message, clipped to `limit` characters. */
 export function firstLine(text: string, limit: number): string {
   const line = (text.split('\n')[0] ?? '').trim()

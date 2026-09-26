@@ -42,7 +42,7 @@ const OFFICIAL_PROPS: Record<string, Record<string, unknown>> = {
     'aria-label': 'l',
   },
   Tooltip: {
-    label: 'Click to reveal the value',
+    label: 'The whole path',
     side: 'right',
     align: 'center',
     delayMs: 100,

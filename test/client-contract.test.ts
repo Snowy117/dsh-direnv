@@ -24,111 +24,17 @@ import type { Harness, HarnessOptions } from './helpers/client-harness.ts'
 import type { ElementInstance, Instance } from './helpers/fake-react.ts'
 import { isRecord } from './helpers/guards.ts'
 import { CLIENT_FILE, REPO } from './helpers/package-manifest.ts'
-
-const SESSION = 'session-contract'
-const DIR = '/work/ws-contract'
-
-const VARIABLES = [
-  { name: 'API_TOKEN', sensitive: true, hasValue: true },
-  { name: 'EDITOR', sensitive: false, hasValue: true },
-  { name: 'PATH', sensitive: false, hasValue: true },
-]
-const VALUES = { API_TOKEN: 'tok-live-123', EDITOR: 'vim', PATH: '/work/ws-contract/bin:/usr/bin' }
-
-/** The one host timestamp every envelope carries, so the clock assertion is not a moving target. */
-const AT = 1_737_000_000_000
-
-/** One `PATH` diff entry exactly as the host serializes it. */
-interface EnvelopePathEntry {
-  value: string
-  change: string
-}
-
-/**
- * A realistic ordered diff: the base was
- * `/usr/bin:/opt/legacy/bin:/work/ws-contract/bin`, the new PATH prepends the
- * nix profile and drops `/opt/legacy/bin`.
- */
-const PATH_ENTRIES: EnvelopePathEntry[] = [
-  { value: '/nix/store/abcd1234-nix-direnv/bin', change: 'added' },
-  { value: '/opt/legacy/bin', change: 'removed' },
-  { value: '/work/ws-contract/bin', change: 'unchanged' },
-  { value: '/usr/bin', change: 'unchanged' },
-]
-
-interface EnvelopeStatus {
-  dir: string
-  state: string
-  at: number
-  ms: number
-  envrcPath: string
-  memoHit: boolean
-  watchCount: number
-  variables: { name: string; sensitive: boolean; hasValue: boolean }[]
-  pathEntries: EnvelopePathEntry[]
-  credentials: string[]
-  errorSummary: string | null
-  warnings: string[]
-  env: Record<string, string> | null
-}
-
-interface Envelope {
-  ok: boolean
-  plugin: { name: string; version: string }
-  sessionId: string
-  dir: string
-  status: EnvelopeStatus
-  gate: { dir: string; state: string; result: string; elapsedMs: number }
-  config: { disabledDirs: string[]; loadTimeoutMs: number }
-}
-
-interface EnvelopeOptions {
-  state?: string
-  env?: Record<string, string> | null
-  overrides?: Partial<EnvelopeStatus>
-}
-
-/**
- * The exact envelope `src/status-route.ts` answers for a known directory:
- * the record is nested under `status`, and `ok` / `plugin` / `sessionId` / `dir`
- * / `gate` / `config` sit beside it.
- */
-function envelope({ state = 'ok', env = null, overrides = {} }: EnvelopeOptions = {}): Envelope {
-  return {
-    ok: true,
-    plugin: { name: 'dsh-direnv', version: '0.1.0' },
-    sessionId: SESSION,
-    dir: DIR,
-    status: {
-      dir: DIR,
-      state,
-      at: AT,
-      ms: 1234,
-      envrcPath: `${DIR}/.envrc`,
-      memoHit: true,
-      watchCount: 2,
-      variables: VARIABLES.map((variable) => ({ ...variable })),
-      pathEntries: PATH_ENTRIES.map((entry) => ({ ...entry })),
-      credentials: ['API_TOKEN'],
-      errorSummary: null,
-      warnings: [],
-      env,
-      ...overrides,
-    },
-    gate: { dir: DIR, state: 'released', result: 'ok', elapsedMs: 12 },
-    config: { disabledDirs: [], loadTimeoutMs: 300_000 },
-  }
-}
-
-/** The host's other 200: a session with no directory it can resolve. */
-function noWorkspaceEnvelope() {
-  return { ok: true, plugin: { name: 'dsh-direnv', version: '0.1.0' }, sessionId: SESSION, dir: null, status: null, gate: null }
-}
-
-/** A record with the envelope stripped off, which the reader must still accept. */
-function flatRecord(options?: EnvelopeOptions): EnvelopeStatus {
-  return envelope(options).status
-}
+import { ROW_ICON, SECTION_ICONS, elementOf, sectionOf, variableRow } from './helpers/panel-queries.ts'
+import {
+  AT,
+  DIR,
+  PATH_ENTRIES,
+  SESSION,
+  VALUES,
+  envelope,
+  flatRecord,
+  noWorkspaceEnvelope,
+} from './helpers/status-envelope.ts'
 
 function withHarness(t: TestContext, options: HarnessOptions): Promise<Harness> {
   return createHarness({ sessionId: SESSION, ...options }).then((harness) => {
@@ -260,8 +166,13 @@ test('each PATH transition renders as one official tag, in host order, marked wi
     .filter((path) => PATH_ENTRIES.some((entry) => entry.value === path))
   assert.deepEqual(rendered, PATH_ENTRIES.map((entry) => entry.value), 'the host order is preserved: earlier means higher priority')
 
-  const text = harness.react.textOf(panel)
-  assert.ok(text.includes('Earlier entries take precedence'), 'the order/colour legend is rendered')
+  const section = sectionOf(harness, panel, SECTION_ICONS.path)
+  assert.ok(section !== undefined, 'the diff is the body of the PATH section header')
+  assert.equal(section.props.open, true, 'and the section starts open, so the diff is on screen without a click')
+  assert.ok(
+    PATH_ENTRIES.every((entry) => harness.react.textUnder(section).includes(entry.value)),
+    'every entry renders inside that one section',
+  )
 })
 
 test('a long path reaches the official PathLabel whole, and nothing shortens it in JavaScript', async (t) => {
@@ -340,9 +251,12 @@ test('an unset PATH is announced in the PATH card, an untouched PATH stays silen
   const panel = harness.mountPanel()
   await harness.settle()
 
-  let text = harness.react.textOf(panel)
-  assert.ok(text.includes('PATH was removed by this .envrc'), 'the `unset PATH` tombstone is reported in the PATH card')
-  assert.ok(!text.includes('Earlier entries take precedence'), 'the card claims no diff, because there is none to read')
+  const section = sectionOf(harness, panel, SECTION_ICONS.path)
+  assert.ok(section !== undefined, 'the `unset PATH` tombstone is reported in the PATH card')
+  assert.ok(
+    harness.react.textUnder(section).includes('PATH was removed by this .envrc'),
+    'the tombstone is the open PATH section body',
+  )
 
   // The same empty diff without a tombstone must stay silent: "PATH did not
   // change" is not "PATH was removed".
@@ -356,9 +270,13 @@ test('an unset PATH is announced in the PATH card, an untouched PATH stays silen
   harness.tick()
   await harness.settle()
 
-  text = harness.react.textOf(panel)
+  const text = harness.react.textOf(panel)
   assert.ok(!text.includes('PATH was removed by this .envrc'), 'an untouched PATH is never reported as removed')
-  assert.ok(!text.includes('Earlier entries take precedence'), 'no PATH card is rendered without a diff or a tombstone')
+  assert.equal(
+    sectionOf(harness, panel, SECTION_ICONS.path),
+    undefined,
+    'no PATH card is rendered without a diff or a tombstone',
+  )
 })
 
 test('no hide/show control survives, in either language', async (t) => {
@@ -425,52 +343,57 @@ test('expanding a row asks the host for values, and collapsing stops asking', as
   await harness.settle()
 
   assert.ok(!harness.lastUrl()!.includes('values=1'), 'the default poll does not pull secret values')
-  let row = harness.primitives(panel, 'DisclosureRow')[0]
+  // The first disclosure row on screen is the section header; values are fetched
+  // for a variable row, so the click has to land on one.
+  const row = variableRow(harness, panel, 'EDITOR')
   assert.ok(row !== undefined, 'the variable list rendered a disclosure row')
 
   harness.react.clickInside(row)
   await harness.settle()
   assert.ok(harness.lastUrl()!.includes('values=1'), 'expanding a row adds values=1 to the poll')
-  assert.ok(harness.react.textOf(panel).includes('tok-live-123'), 'the revealed row shows the original value')
+  assert.ok(harness.react.textOf(panel).includes('vim'), 'the expanded row shows the value the host sent')
 
-  row = harness.primitives(panel, 'DisclosureRow')[0]
-  harness.react.clickInside(row!)
+  harness.react.clickInside(variableRow(harness, panel, 'EDITOR')!)
   await harness.settle()
   harness.tick()
   await harness.settle()
   assert.ok(!harness.lastUrl()!.includes('values=1'), 'collapsing every row stops asking for values')
 })
 
-test('a variable row discloses on the official row, and copying goes through writeClipboard', async (t) => {
+test('a variable row discloses on the official row, and the copy button writes the value', async (t) => {
   const responder = (call: { url: string }) =>
     jsonReply(envelope({ env: call.url.includes('values=1') ? { ...VALUES } : null }))
   const harness = await withHarness(t, { responder })
   const panel = harness.mountPanel()
   await harness.settle()
 
-  const row = harness.primitives(panel, 'DisclosureRow').find((instance) => instance.props.title === 'EDITOR')
+  const row = variableRow(harness, panel, 'EDITOR')
   assert.ok(row !== undefined, 'each variable is one official disclosure row')
   assert.equal(row.props.expandable, true, 'the row is the disclosure control')
   assert.equal(row.props.open, false, 'and it starts closed')
-  assert.equal(row.props.keepContentWhenOpen, true, 'the collapsed content stays inline once the row opens')
-  const collapsed = row.props.collapsedContent
-  assert.ok(isRecord(collapsed), 'a closed row carries its collapsed content')
-  assert.equal(harness.primitiveName(collapsed.type), 'Tooltip', 'which is the official tooltip')
-  const tip: Record<string, unknown> = isRecord(collapsed.props) ? collapsed.props : {}
-  assert.equal(tip.label, 'Click to reveal the value', 'labelled with the reveal action')
-  assert.equal(tip.portal, true, 'and portaled out of the row that would clip it')
   assert.ok(!harness.react.textOf(panel).includes('vim'), 'a closed row keeps the value off screen')
 
   harness.react.clickInside(row)
   await harness.settle()
   assert.ok(harness.react.textOf(panel).includes('vim'), 'the open row shows the value')
 
-  const copy = harness.primitives(panel, 'Button').find((instance) => instance.props.title === 'Copy variable name')
-  assert.ok(copy !== undefined, 'the open row offers the official copy action')
+  const copy = harness.primitives(panel, 'Button').find((instance) => instance.props.title === 'Copy value')
+  assert.ok(copy !== undefined, 'the open row offers the official copy action, labelled as copying the value')
+  const copyIcon: unknown = copy.props.icon
+  assert.ok(isRecord(copyIcon), 'the button carries an icon element')
+  assert.equal(harness.primitiveName(copyIcon.type), 'IconCopyOutlineRegular', 'which starts as the copy glyph')
   harness.react.click(copy)
   await harness.settle()
-  assert.deepEqual(harness.clipboard, ['EDITOR'], 'the name, and only the name, went to the official clipboard')
-  assert.ok(harness.react.textOf(panel).includes('Copied'), 'the copy is acknowledged in the panel')
+  assert.deepEqual(harness.clipboard, ['vim'], 'the value, and only the value, went to the official clipboard')
+  const acknowledged = harness.primitives(panel, 'Button').find((instance) => instance.props.title === 'Copied')
+  assert.ok(acknowledged !== undefined, 'the copy is acknowledged on the button itself')
+  const checkIcon: unknown = acknowledged.props.icon
+  assert.ok(isRecord(checkIcon), 'the acknowledgement is an icon too')
+  assert.equal(
+    harness.primitiveName(checkIcon.type),
+    'IconCheckOutlineRegular',
+    'by the official check glyph, not a hand-drawn colour',
+  )
 })
 
 test('the variable search field is the official input, and it filters the rows', async (t) => {
@@ -493,8 +416,13 @@ test('the variable search field is the official input, and it filters the rows',
   ;(onChange as (event: unknown) => void)({ target: { value: 'edit' } })
   harness.react.flush()
 
-  const titles = harness.primitives(panel, 'DisclosureRow').map((instance) => String(instance.props.title))
-  assert.deepEqual(titles, ['EDITOR'], 'only the matching variable row survives the filter')
+  // The section headers are disclosure rows too, so the surviving rows are read
+  // off the glyph only a variable row carries.
+  const rows = harness.primitives(panel, 'DisclosureRow').filter((instance) => {
+    const element = elementOf(instance.props.icon)
+    return element !== null && harness.primitiveName(element.type) === ROW_ICON
+  })
+  assert.deepEqual(rows.map((instance) => String(instance.props.title)), ['EDITOR'], 'only the matching variable row survives the filter')
   assert.equal(harness.primitives(panel, 'Input')[0]?.props.value, 'edit', 'the field stays controlled by the panel')
 })
 
@@ -622,8 +550,9 @@ test('the Chinese table is what a zh locale service shows, and the hide copy is 
   const text = harness.react.textOf(panel)
   assert.ok(text.includes('已就绪'), 'the zh state label is rendered')
   assert.ok(text.includes('PATH 条目'), 'the zh PATH section title is rendered')
-  assert.ok(text.includes('靠前的条目优先级更高'), 'the zh order/colour legend is rendered')
-  assert.ok(text.includes('展开任意一行以获取变量值'), 'the zh value hint points at expanding a row')
+  for (const gone of ['靠前的条目优先级更高', '展开任意一行以获取变量值', '值默认遮蔽为', '展开行后点击复制按钮']) {
+    assert.ok(!text.includes(gone), `the panel no longer renders the hint "${gone}"`)
+  }
   assert.ok(!text.includes('本工作区禁用'), 'the old "disable in this workspace" claim is gone')
   assert.ok(!text.includes('exposeValues'), 'no copy points at a configuration key the host does not have')
   for (const gone of ['本会话隐藏面板', '恢复显示面板', '已在本浏览器隐藏', '已暂停轮询']) {
@@ -680,15 +609,34 @@ test('the three message tables stay in sync, and the dead keys stay deleted', ()
     ['locale/zh.json', jsonZh],
     ['locale/en.json', jsonEn],
   ]
-  const deleted = ['label.state', 'label.pathAdditions', 'action.disable', 'action.enable', 'hint.hidden', 'hint.paused']
+  const deleted = [
+    'label.state',
+    'label.pathAdditions',
+    'action.disable',
+    'action.enable',
+    'action.reveal',
+    'action.hide',
+    'action.copyName',
+    'hint.hidden',
+    'hint.paused',
+    'hint.pathOrder',
+    'hint.masked',
+    'hint.noValues',
+    'hint.copyHint',
+    'hint.empty',
+    'hint.credentials',
+  ]
   for (const [label, keys] of tables) {
     for (const key of deleted) {
       assert.ok(!keys.has(key), `${label} no longer carries the dead ${key} key`)
     }
     for (const key of [
-      'hint.pathOrder',
+      'action.copyValue',
       'hint.pathEmpty',
       'hint.pathUnset',
+      'hint.valuePending',
+      'hint.valueUnset',
+      'hint.valueRemoved',
       // The official relative-time buckets hand over no words of their own.
       'time.now',
       'time.minutes',
@@ -699,7 +647,7 @@ test('the three message tables stay in sync, and the dead keys stay deleted', ()
     ]) {
       assert.ok(keys.has(key), `${label} carries ${key}`)
     }
-    assert.equal(keys.size, 65, `${label} is 65 keys wide`)
+    assert.equal(keys.size, 58, `${label} is 58 keys wide`)
   }
 })
 

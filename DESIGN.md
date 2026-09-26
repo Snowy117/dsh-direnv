@@ -236,12 +236,14 @@ ctx.slots.inject('sidebar.right.pane.tab', () =>
 面板内容（P2）：
 
 1. **状态卡**：`.envrc` 路径、状态（加载中 / 已就绪 / 被 block / 出错 / 无 `.envrc`）、耗时、错误摘要；一个按钮——**重新加载**。（曾计划的「本工作区禁用」按钮已删除，理由见本节末。）
-2. **环境明细**：本工作区由 direnv 提供的变量清单（值默认遮蔽、可逐个展开、可搜索）、`PATH` 的**有序三态差分**（绿 = 新增、红 = 被移除、灰 = 不变；靠前 = 优先级更高，列表逐行整条显示、不做 JS 截断）。
-3. **凭据名单**（D8）：命中 `/KEY|PASSWORD|SECRET|TOKEN/i` 的变量名单，明确标注「这些会出现在子进程环境中」。**只给用户看。**
+2. **环境明细**：本工作区由 direnv 提供的变量清单（折叠行只有变量名，展开才向 host 取值；值等宽、按原样显示、可搜索）、`PATH` 的**有序三态差分**（绿 = 新增、红 = 被移除、灰 = 不变；靠前 = 优先级更高，列表逐行整条显示、不做 JS 截断）。
+3. **凭据名单**（D8）：命中 `/KEY|PASSWORD|SECRET|TOKEN/i` 的变量名单，默认折叠。**只给用户看。**
 
-**面板只用官方组件画（D9 的视觉约束）**：DSH 的客户端模块表把 `@deepseek-ai/dsh-client-ui-primitives` 放在**平台种子**里（与 `react` 同级），所以 `client/primitives.ts` 直接从模块表取官方原子：状态用 `StateDot` + `Tag`（`ok→done/success`、`loading→ongoing/info`、`blocked` 等 → `warning/warning`、`error` → `error/danger`，映射表就是 `client/panel.ts` 里的 `STATE_FACES`），路径（`.envrc`、工作目录、每个 `PATH` 条目）用 `PathLabel`，字段名与分区标题用 `outline` 的 `Tag`，变量行用 `DisclosureRow`，搜索框用 `Input`，重新加载与复制用 `Button`，复制走官方 `writeClipboard`，相对时间走官方 `relativeTime`（词条仍在我们自己的字典里），悬停提示用 `Tooltip`。**本插件不写任何配色 / 圆角 / 边框 / 阴影 / 字体**：`client/styles.ts` 只剩 flex / gap / padding / min-width 这类纯布局，也不再注入 `<style>`。用户装了主题插件时，面板与 shell 一起换肤，而不是自成一套。
+三个分区都是官方 `DisclosureRow`（分区头可折叠），**分区头不再用 `Tag`**：11px 的胶囊比正文还小，正是「标题比解释说明还小」的成因；`DisclosureRow` 的官方标题排版是 `--dsh-content-font-size-secondary`（默认 14px 正文下为 13px、行高 24px，见附录 A），并且要把比它大的提示段落整段删掉，层级才对得上——删了哪些键见 §7.1。展开后的值用主题令牌 `font: var(--dsw-font-markdown-code-block)`（与官方 `CodeCard` / `TerminalBlock` 同一写法，不是自写字体），缩进用 `calc(22px + var(--dsh-content-font-delta, 0px))` 对齐官方标题文字的左沿（= `.leading` 的 16px 盒 + 6px 间距）。
 
-> **为什么 `PATH` 不喂给 `DiffBlock`（评估过并否掉）**：官方 `DiffBlock` 内部是 `structuredPatch(..., { context: 3 })`，两次改动之间超过 3 行的未变条目会被折成 `⋯`，「靠前 = 优先级更高」的整条有序列表就看不全了；而 host 传来的 `pathEntries` 只有「三态 + 顺序」，把 `added` 滤掉反推 old 文本在 `PATH` 被重排时并不等于真实 base（`src/evaluator/derive.ts` 的 `diffPathEntries` 把 `unchanged` 按**新**顺序排）。所以每行渲染成一个 `Tag`（tone 三态）+ `PathLabel`，`added` 行带官方 `IconPlusOutlineRegular`（`+`）、`removed` 行带 `IconCloseOutlineRegular`（`×`），与文案表 `hint.pathOrder` 的说法一致，做到**不靠颜色也能分辨**。
+**面板只用官方组件画（D9 的视觉约束）**：DSH 的客户端模块表把 `@deepseek-ai/dsh-client-ui-primitives` 放在**平台种子**里（与 `react` 同级），所以 `client/primitives.ts` 直接从模块表取官方原子：状态用 `StateDot` + `Tag`（`ok→done/success`、`loading→ongoing/info`、`blocked` 等 → `warning/warning`、`error` → `error/danger`，映射表就是 `client/panel.ts` 里的 `STATE_FACES`），路径（`.envrc`、工作目录、每个 `PATH` 条目）用 `PathLabel`，字段名用 `outline` 的 `Tag`，分区头与变量行都用 `DisclosureRow`，搜索框用 `Input`，重新加载与复制用 `Button`，复制走官方 `writeClipboard`（**写进剪贴板的是变量的值**，键名因此是 `action.copyValue`；复制成功的反馈是官方 `IconCheckOutlineRegular` 换掉按钮图标），相对时间走官方 `relativeTime`（词条仍在我们自己的字典里），悬停提示用 `Tooltip`。**本插件不写任何配色 / 圆角 / 边框 / 阴影 / 字体**：`client/styles.ts` 只有 flex / gap / padding / min-width 这类纯布局，唯一的例外是值的等宽——那是主题令牌 `var(--dsw-font-markdown-code-block)` 本身，主题插件一改就跟着改；也不注入 `<style>`。用户装了主题插件时，面板与 shell 一起换肤，而不是自成一套。
+
+> **为什么 `PATH` 不喂给 `DiffBlock`（评估过并否掉）**：官方 `DiffBlock` 内部是 `structuredPatch(..., { context: 3 })`，两次改动之间超过 3 行的未变条目会被折成 `⋯`，「靠前 = 优先级更高」的整条有序列表就看不全了；而 host 传来的 `pathEntries` 只有「三态 + 顺序」，把 `added` 滤掉反推 old 文本在 `PATH` 被重排时并不等于真实 base（`src/evaluator/derive.ts` 的 `diffPathEntries` 把 `unchanged` 按**新**顺序排）。所以每行渲染成一个 `Tag`（tone 三态）+ `PathLabel`，`added` 行带官方 `IconPlusOutlineRegular`（`+`）、`removed` 行带 `IconCloseOutlineRegular`（`×`），做到**不靠颜色也能分辨**（原先还有一句 `hint.pathOrder` 图例，已随「默认删提示文案」一并删除：三个 tone 加两个图标已经把「靠前 = 优先级更高、谁新增谁被移除」说完）。
 
 **不要依赖 `dsh-better-sidebar`**：DSH 0.1.7 自带这套官方右列 API，而 better-sidebar 自己（v0.19 起）就是走这套 API 的——我们的 tab 会与它的文件树/编辑器 tab 并列显示。`ctx.betterSidebar` 那个服务只管它的底部工作台，与本插件无关。
 
@@ -403,6 +405,8 @@ dsh-direnv/
 **为什么需要构建步骤。** TypeScript 是刻意的选择：强类型能把「承诺与实现不符」这类问题提前到编译期。而 Node 的原生类型擦除**不作用于 `node_modules`**——插件恰恰是从 profile 的 `node_modules` 里被 DSH 加载的，所以对外发布的必须是编译产物。client 半边另有独立约束：浏览器侧每个插件只能有**一个**文件（客户端模块表没有相对 `require`），因此 13 个 `client/**/*.ts` 模块由 esbuild 打成单文件 `lib/client.js`（零 `import`/`export` 语句）。模块表只回答那 9 个**平台种子**说明符，所以产物里的 `require(` **只能**是 `react` 与 `@deepseek-ai/dsh-client-ui-primitives`（客户端插件就是靠后者用官方组件画面板，见 §3.5）；写错任何一个都会在工厂里抛错、整个 web app 白屏，因此 `test/client-contract.test.ts` 会扫出产物里**每一个** `require("…")` 并逐个对着种子清单断言，`test/helpers/client-harness.ts` 的假模块表也会对清单外的说明符抛错。
 
 **开发期不需要构建也能跑测试。** `node --test 'test/*.test.ts'` 与 `node test/client-boot.ts` 直接吃 TS 源码（Node ≥ 22.18 的原生类型擦除，无需 loader），只有契约测试要读打包产物，所以 `npm test` 仍先跑一次 build。
+
+**面板的字号刻度（实测）。** shell 自己发布内容字号旋钮 `--dsh-content-font-size`（默认 14px），官方组件各写各的：`DisclosureRow` 的标题是**次级档** `--dsh-content-font-size-secondary`（13px/24px），代码类内容走 `--dsw-font-markdown-code-block`（11px/19px 等宽）。官方刻度里**没有比正文更大的"标题档"**（primitive 里出现过的最大档位是 16px，只用于 Modal 标题）。因此面板的做法是：根节点声明 `font-size: var(--dsh-content-font-size, 14px)`（否则裸文本会继承浏览器默认的 16px——那正是"标题比说明还小"的真实成因），分区标题用官方次级档，值用代码 token。若将来要求标题在视觉上压过正文，只能离开官方刻度（给 `DisclosureRow` 的标题注入字号），那会与主题改动脱钩，属于需要单独决策的破例。
 
 **规模纪律。** 每个 `.ts` 源文件的有效行（非空、且非纯注释行）≤ 400，测试与测试台 ≤ 600。当前实测 **66 个 TS 文件、10,020 有效行**；最大源文件 **341**（`src/types.ts`），最大测试文件 **579**（`test/client-contract.test.ts`）。计数口径（可复现）：跳过空行、`//` 行、`/* */` 独占行及其 `*` 续行，其余计入。
 
@@ -576,6 +580,22 @@ HMR 循环：`hmr` 行 `config.root = ["<仓库根>"]`，`npm run build` 写出 
 
 ---
 
+### 7.1.1 面板层级 / 复制 / 等宽 / XSS 的证据（D9 的 GUI 修正）
+
+用户在真浏览器里看过第一版面板后提了六条意见，这一轮把它们钉在测试里。**可复现的判据都在 `test/client-panel.test.ts`**（8 个用例，跑的是打包产物 `lib/client.js` + 官方组件假件），要点：
+
+- **分区头 = 官方 `DisclosureRow`**，标题排版来自 `--dsh-content-font-size-secondary`（默认 14px 正文下 13px/24px），不再是 11px 的 `Tag` 胶囊；测试断言三个分区头都是 `DisclosureRow` 且没有任何 `Tag` 的整段文字等于分区标题。
+- **缩进**：官方 `DisclosureRow` 不给 `children` 任何缩进，所以面板自己在分区体与展开值上写 `paddingLeft: calc(22px + var(--dsh-content-font-delta, 0px))`（= `.leading` 的 16px 盒 + 6px 间距），测试同时钉住分区体与值行的这个值。
+- **默认展开态**：环境变量与 `PATH` 展开、凭据名单折叠；点分区头能收起。
+- **复制的是值**：`CLIP_ME=value-not-name-42` 的 fixture 断言 `writeClipboard` 收到的是 `value-not-name-42` 而不是 `CLIP_ME`，反馈是官方 `IconCheckOutlineRegular`。
+- **复制按钮留在展开体里，不在折叠行**：官方 `.row` 是 `height: calc(24px + var(--dsh-content-font-delta, 0px))` 且 `overflow: hidden`，官方 `Button` 最小的 `sm` 也是 28px 高——塞进 24px 的标题行会被裁掉。值本来就只在展开时才向 host 取，所以「先展开再复制」既是布局的结论也是隐私模型的结论。
+- **等宽与换行**：值的 `<span>` 带 `font: var(--dsw-font-markdown-code-block)`、`white-space: pre-wrap`，测试断言它的唯一文本子节点与 host 送来的字节逐字符相等（含 `\n`、`\t`、连续空格），面板文本里不出现 `⏎`。
+- **XSS**：值 `<img src=x onerror=…>`、变量名 `<script>…`、`errorSummary` `</pre><img …>` 三个 payload 都只作为 **React 文本子节点**进树；断言树里没有 `img`/`script`/`pre` 元素、没有 *innerHTML / srcdoc* 之类的 prop、全局没有被设标记，并且产物 `lib/client.js` 里没有 `innerHTML` / `insertAdjacentHTML` / `dangerouslySetInnerHTML` / `eval(` 等 sink。**它证明的是「本插件的渲染路径不把数据当标记」；React 自身的转义与官方组件内部的渲染不在覆盖范围内（那是平台的责任）。**
+
+`PathLabel` 顺带核对到一个与任务描述不符的事实：`PathLabel.module.css` 的 `.path` 只有 `font-size: 12px`，**没有**等宽字体族——所以 `.envrc` / 目录行并不是等宽的。本轮按「不自写字体」的规矩没有给它加字体（见 §8 的结构性限制）。
+
+---
+
 ## 7.2 实现期端到端证据（`direnv-smoke`）
 
 设计阶段的所有结论最终要落到一次**真启动**上。这一节记录第一版实现的端到端结果，它是"这个插件真的能在 DSH 里工作"的判据。
@@ -662,6 +682,7 @@ dsh --profile installed --patch <llm-only overlay> --json "…"          # 真�
 1. MCP server 进程与宿主 helper 拿不到 direnv 环境（它们不走 `ctx.subprocess`）。
 2. 安装 = 接管 `ctx.subprocess` 一行；若组合里换成别的 subprocess provider（例如远端 SSH 那种），本插件会把它盖住。
 3. `spawn()` 是同步的，所以**非预热路径**（用户直接点开一个此前没访问过的目录的终端）在 `spawnTerminal` 覆盖范围之外不会有环境——实际上 PTY 走异步的 `spawnTerminal`，所以只影响「别的东西在冷目录里 spawn」这一小类。
+4. 面板里的 `.envrc` / 工作目录 / `PATH` 条目走官方 `PathLabel`，而它**不是等宽**（`.path` 只有 `font-size: 12px`，无 `font-family`）。要让它们等宽就得自写字体或另找官方组件，两者本轮都没做。
 
 **风险**
 
@@ -712,6 +733,11 @@ dsh --profile installed --patch <llm-only overlay> --json "…"          # 真�
 | `agent/status` 只有 `idle`/`running`，插件无法设文案 | `dsh-agent/lib/types/runtime-types.d.ts:90, 252` |
 | composer 占位符 / Toast 的官方 API | `dsh-client-ui-conversation/lib/types/client/contract/composer-blocks.d.ts`、`contract/input.d.ts:186, 227-232` |
 | 官方右列 tab 两阶段注册 | `dsh-client-ui-sidebar-right/lib/types/client/index.d.ts:18-46`、`tab-registry.d.ts:71-133` |
+| `DisclosureRow` 标题排版 = `--dsh-content-font-size-secondary`（默认 14px 正文下 13px/24px、`--dsw-alias-label-secondary`）；`.leading` = `calc(16px + delta)` 盒 + `margin-right: 6px` | `dsh-client-ui-primitives/lib/DisclosureRow.module.css`（`.title` / `.leading` / `.row`） |
+| `Tag` 胶囊固定 `11px/17px`、字重 500（所以当时的「分区标题」比正文小） | `dsh-client-ui-primitives/lib/Tag.module.css`（`.tag`） |
+| 值等宽用的主题令牌（`CodeCard` / `TerminalBlock` 同款写法） | `dsh-client-ui-primitives/lib/CodeCard.module.css:7,81`、`TerminalBlock.module.css:7`；令牌本体 `--dsw-font-markdown-code-block: 11px/19px var(--ds-font-family-code)` 在 web 前端 `body{…}` 里发布 |
+| `--dsh-content-font-size` 是用户设置（12–17，默认 14），由 layout 的 `ThemePresenter` 写到 `body` | `dsh-client-ui-layout/lib/client.js`（`CONTENT_FONT_SIZE_VARIABLE`）；`dsh-client-ui-theme/lib/index.js`（schema `.default(14)`） |
+| `PathLabel` 不等于等宽：`.path` 只有 `font-size: 12px`，无 `font-family` | `dsh-client-ui-primitives/lib/PathLabel.module.css` |
 | host→client 无通用推送（硬编码白名单） | `dsh-api-remotes/lib/types/remote-events.d.ts:12-81` |
 | bundle patch 语义（`disabled` 按 id 断言；`insert` 追加） | `dsh-app-boot` 内嵌 schema 描述；`dsh-package-manifest/lib/types/types.d.ts` |
 | 官方插件开发 skill（含 practices「用最弱的机制」） | `<dsh-agent-preset>/skills/cordis-plugin-development/` |

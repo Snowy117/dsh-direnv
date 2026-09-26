@@ -121,7 +121,7 @@ interface StatusRecord {
   errorSummary: string | null
   warnings: string[]
   watchCount: number           // 上次求值报告的被 watch 路径数（面板暂未使用，保留给诊断）
-  env: EnvOverlay | null       // 值默认遮蔽由 client 决定；只有路由收到 ?values=1 才填充
+  env: EnvOverlay | null       // 值不进默认响应；只有路由收到 ?values=1 才填充（客户端展开某一行时才请求）
 }
 ```
 
