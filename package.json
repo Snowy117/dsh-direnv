@@ -1,6 +1,6 @@
 {
   "name": "dsh-direnv",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "Load each workspace's direnv environment into every command the DeepSeek Harness runs — automatically, per working directory. 让 DSH 每个工作区的子进程自动带上该工作区的 direnv 环境。",
   "repository": {
     "type": "git",
@@ -34,7 +34,7 @@
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-subprocess-local": "~0.1.7-rc.1"
+    "@deepseek-ai/dsh-subprocess-local": ">=0.1.7-rc.1 <0.3.0-0"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "~3.18.4"

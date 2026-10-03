@@ -2,7 +2,7 @@
 
 > 一个 DSH（DeepSeek Harness）插件：让每个工作区的子进程都自动带上该工作区 `direnv` 的环境——仿佛 dsh 本身就是在那个目录下被启动的。
 >
-> 目标版本：DSH `0.1.7-rc.1` · 交付形态：npm 包 `dsh-direnv`（MIT，双语文档）
+> 目标版本：DSH `0.1.7-rc.1` 起、上界 `<0.3.0-0`（`0.2.0-rc.2` 已复核，见 §7.3） · 交付形态：npm 包 `dsh-direnv`（MIT，双语文档）
 
 ---
 
@@ -304,7 +304,7 @@ mod = await ctx.loader.internal?.import(spec, <树内 href>, {})
 
 - **不要为了「能解析」而声明 peer**——`ctx.loader.import` 已经覆盖了所有形态。
 - 对**非 `@deepseek-ai/dsh*`** 的包（例如 `@deepseek-ai/schemastery`），版本范围**永远不被校验**（只看键名，且键名要精确等于请求的包名、该包还要在安装闭包内）→ 写错无害。
-- 对 **`@deepseek-ai/dsh*`**，范围**会被 `evaluatePluginCompatibility` 校验**；写错时 `preflight` 直接把该行 `disabled=true`，stderr 打一行 `dsh: disabling profile plugin row "…"`，**启动不被拒绝、插件静默不加载**（发布事故高风险）。所以：要么不声明，要么写一个**确定能匹配**的范围（本项目用 `~0.1.7-rc.1`，实测可匹配）。
+- 对 **`@deepseek-ai/dsh*`**，范围**会被 `evaluatePluginCompatibility` 校验**；写错时 `preflight` 直接把该行 `disabled=true`，stderr 打一行 `dsh: disabling profile plugin row "…"`，**启动不被拒绝、插件静默不加载**（发布事故高风险）。所以：要么不声明，要么写一个**确定能匹配**的范围（本项目用 `>=0.1.7-rc.1 <0.3.0-0`，跨 0.1.7→0.2.0 的复核见 §7.3）。
 - `dependencies` 声明**不参与**这条解析路径；`workspace:` 协议**不帮助解析**（且发布到 npm 后语义还会变）。
 
 > 注：`profileContext.installAnchor` 是运行时真正的安装闭包锚点（实测指向 `.pnpm/@deepseek-ai+dsh@…/node_modules/@deepseek-ai/dsh/package.json`），能解析安装闭包、**不能**解析 profile 本地包。最深兜底里的 `loader.internal` 走的是 Node 内部 loader 句柄（`ModuleLoader.fromInternal()` 在无法识别的 Node 版本上会返回 `undefined`），**只作兜底、不作主路径**。
@@ -314,7 +314,7 @@ mod = await ctx.loader.internal?.import(spec, <树内 href>, {})
 > 2. **row 级 preflight**：单行被置 `disabled=true`，stderr 一行 `dsh: disabling profile plugin row "…"`；**`--dump-config` 不跑 preflight，所以 dump 里这一行看起来完全正常**。
 > 3. **安装期**：`dsh plugin add` 会**硬拒**（exit 1，`installation rejected … nothing was installed`），并提示 `dsh plugin allow-version … --accept-risk`。
 >
-> 另外两条：**不声明任何 `@deepseek-ai/dsh*` peer = 完全不设版本闸**（`evaluatePluginCompatibility` 直接返回 undefined）；`*` 能通过纯粹是 `includePrerelease` 的功劳。所以范围写 `~0.1.7-rc.1`：当前 rc 通过、0.1.7 正式版与 0.1.8 也通过（函数级实测计算），0.2.0+ 才拦。**`^0.1.7` 与 `>=0.1.7` 都会被拦**（`^0.1.7` = `>=0.1.7 <0.2.0-0`，而 `0.1.7-rc.1 < 0.1.7`，下界就不满足）。
+> 另外两条：**不声明任何 `@deepseek-ai/dsh*` peer = 完全不设版本闸**（`evaluatePluginCompatibility` 直接返回 undefined）；`*` 能通过纯粹是 `includePrerelease` 的功劳。所以范围写 `>=0.1.7-rc.1 <0.3.0-0`：0.1.7-rc.1 起的全部 0.1.x 与 0.2.x（含预发布）都通过、0.3.0 起才拦（逐版本矩阵见 §7.3）。**两个曾经的写法都要避开**：`~0.1.7-rc.1` 与 `^0.1.7` 的上界都落在 0.2.0 之前（`0.1.7-rc.1 < 0.1.7`，连下界都不满足），DSH 一升到 0.2 就会静默丢插件；`>=0.1.7` 没有上界，等于放弃闸门。
 >
 > **排错时必须两边都看**：patch 自身的警告（`patch: entry "…" not found`）**只出现在 `--dump-config` 的 stderr**；row 级 compat 拒绝**只出现在启动时**。
 
@@ -435,7 +435,7 @@ dsh-direnv/
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-subprocess-local": "~0.1.7-rc.1"
+    "@deepseek-ai/dsh-subprocess-local": ">=0.1.7-rc.1 <0.3.0-0"
   }
 }
 ```
@@ -675,6 +675,42 @@ dsh --profile installed --patch <llm-only overlay> --json "…"          # 真�
 
 ---
 
+## 7.3 DSH 0.2.0-rc.2 兼容性复核（2026-10-01）
+
+**触发**：`@deepseek-ai/dsh` 的 `latest`/`next` 双双移到 `0.2.0-rc.2`（2026-09-29 发布），而发布包当时声明的 `~0.1.7-rc.1` 按 §3.7 的矩阵**必然**被拦——且症状是「静默不存在」。所以先复核耦合面，再决定上界要不要上移。
+
+**判据一：函数级范围矩阵**（直接 import `0.2.0-rc.2` 的 `evaluatePluginCompatibility` 与它自带的 `semver`，逐版本实算，不是猜）：
+
+| 范围 | 0.1.7-rc.1 | 0.1.8 | 0.2.0-rc.2 | 0.2.1-alpha.1 | 0.3.0-rc.1 |
+|---|---|---|---|---|---|
+| `~0.1.7-rc.1`（原） | OK | OK | ❌ | ❌ | ❌ |
+| `>=0.1.7-rc.1 <0.3.0-0`（新） | OK | OK | OK | OK | ❌ |
+| `^0.2.0-rc.2`（备选） | ❌ | ❌ | OK | OK | ❌ |
+
+`^0.2.0-rc.2` 被否掉的理由：它把「0.1.x 也能用」这个**已经验证过的事实**丢掉，等于向下制造一次无谓的破坏性变更。
+
+**判据二：耦合面逐字节比对**（我们只 import 一个 dsh 包，所以这条是决定性的）：
+
+- `@deepseek-ai/dsh-subprocess-local` 的 `lib/**` 在 `0.1.7-rc.1` 与 `0.2.0-rc.2` 之间**逐字节相同**（`diff -r` 只报 `README.i18n.yaml`），`LocalSubprocessRuntime` 仍是具名导出、`spawn` / `spawnTerminal` 的方法集合不变——D3 的子类化契约没动。
+- client 半边用到的面同样安全：`dsh-host-webserver`（`WebRoute` / `register`）与 `dsh-client-ui-slots` 的 `.d.ts` **逐字节相同**；`dsh-client-modules` 的 `lib/**` **逐字节相同**（模块表种子机制没变）；`dsh-client-ui-sidebar-right` 里我们真正调用的两个契约——`SidebarRightTabRegistry.register(definition)` 与 `SidebarRightTabDefinition`——**逐字节相同**，`SidebarRightGuideEntry` 只新增了可选字段 `commandId?`，槽位名 `sidebar.right.pane.tab`、`sidebar.right.pane.tab.title`、`conversation.input.dock` 与服务名 `sidebarRightTabs` 都还在。该包 0.2.0 确实**删掉**了几个**纯类型**导出（`SidebarRightBinding` / `PinResource` / `SidebarRightNavigator` / `TabOccurrence`），但我们的 client 半边是 esbuild 打好的预构建产物、运行期不读 `.d.ts`，类型删除不构成运行期破坏。
+- 旁证：同期发布、且在 `dsh.compatibility.dshReleases` 里显式标了 `"0.2.0-rc.2": "compatible"` 的 `dsh-context@0.62.2`，同样从模块表 `require("@deepseek-ai/dsh-client-ui-primitives")`——说明该种子在 0.2.0 仍然有效。
+
+**判据三：先复现失败、再复现通过**（改范围的正当性证明）：
+
+- 改之前，把 `direnv-smoke` 打在新 dsh 上是**红的**：`dsh: disabling profile plugin row "harness-probe": Plugin dsh-direnv@0.1.0-alpha.1 is incompatible with dsh 0.2.0-rc.2: peerDependencies {"@deepseek-ai/dsh-subprocess-local":"~0.1.7-rc.1"}`，随后 `tool result[0].text` = `Error: unknown tool "bash"`，`=== RESULT: FAIL (12/15 assertions) ===`。
+- 只把范围改成 `>=0.1.7-rc.1 <0.3.0-0`（并把版本号升到 `0.1.0-alpha.2`）之后：
+
+| 验收 | 0.1.7-rc.1 | 0.2.0-rc.2 |
+|---|---|---|
+| `test/harness/run.sh --all` | 14/14 PASS | 14/14 PASS |
+| `node test/client-boot.ts` | — | PASS |
+| `npm run typecheck` | 干净 | 干净 |
+| `npm test` | 121 pass / 1 skip / 0 fail | 121 pass / 1 skip / 0 fail |
+
+**结论**：上界写 `<0.3.0-0`，0.1.7-rc.1 与 0.2.0-rc.2 都放行；0.3.0 起继续拦，届时按本节同样三步复核后再决定是否上移。`<0.3.0-0` 里的 `-0` 不是笔误：没有它，`0.3.0-rc.1` 这类预发布仍会满足 `<0.3.0`（预发布排在正式版之前），闸门会漏。
+
+---
+
 ## 8. 已知限制与风险
 
 **结构性限制（无法绕过，写进 README）**
@@ -689,7 +725,7 @@ dsh --profile installed --patch <llm-only overlay> --json "…"          # 真�
 | 风险 | 缓解 |
 |---|---|
 | ~~**真实 pnpm 安装下出现第二份 `@deepseek-ai/cordis`** ⇒ `Service` 基类身份分叉~~ | **已实测证伪**（§7.2）：`dsh plugin add file:` 真装后 profile 下 0 份 `cordis/package.json`，完整一轮注入跑通、无降级签名 |
-| 与 `LocalSubprocessRuntime` 内部契约耦合，DSH 升级可能破裂 | 用 `peerDependencies: ^0.1.7-rc.1` 让 DSH 在版本不匹配时**大声拒绝**加载，而不是静默出错 |
+| 与 `LocalSubprocessRuntime` 内部契约耦合，DSH 升级可能破裂 | 用 `peerDependencies: >=0.1.7-rc.1 <0.3.0-0` 让 DSH 在版本不匹配时**大声拒绝**加载，而不是静默出错。上界随每次升级重新复核后上移（0.2.0-rc.2 的复核见 §7.3：`dsh-subprocess-local` 的 `lib/` 逐字节未变，故 0.2.x 已放行） |
 | 首次 `use flake` 构建 > 300s（门闸预算） | 门闸按时放行，求值**不中断**（`evaluateTimeoutMs` 默认 0 = 不杀），缓存写好后下一条命令自动带上 |
 | 死循环 `.envrc` 永不结束（不杀默认的代价） | 每目录只有**一个** `direnv` 子进程（in-flight 去重，反复 prewarm 不会叠进程）、4MB 输出上限、`signal` 仍能杀；需要硬兜底就把 `evaluateTimeoutMs` 设成有限值 |
 | **超时/中止只保证「不再等」，不保证被杀的 `.envrc` 没有副作用** | 进程组 SIGKILL 保证不留孤儿（direnv + bash + 孙进程一起死），但它在被杀之前可能已经写过文件、起过服务、改过 git 状态。要靠「根本不执行」来保证无副作用，只能靠 allow 库（不批准）与 `enabled: false`，而不是超时 |
@@ -714,7 +750,7 @@ dsh --profile installed --patch <llm-only overlay> --json "…"          # 真�
 
 ---
 
-## 附录 A：关键证据索引（DSH 0.1.7-rc.1）
+## 附录 A：关键证据索引（DSH 0.1.7-rc.1；0.2.0-rc.2 的差异复核见 §7.3）
 
 | 事实 | 位置 |
 |---|---|
