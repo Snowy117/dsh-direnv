@@ -53,6 +53,9 @@
     "README.zh.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "tag": "latest"
+  },
   "keywords": [
     "dsh-plugin",
     "dsh",
